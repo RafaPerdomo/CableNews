@@ -1,0 +1,6 @@
+<Solution>
+  <Project Path="CableNews.Application/CableNews.Application.csproj" />
+  <Project Path="CableNews.Domain/CableNews.Domain.csproj" />
+  <Project Path="CableNews.Infrastructure/CableNews.Infrastructure.csproj" />
+  <Project Path="CableNews.Worker/CableNews.Worker.csproj" />
+</Solution>

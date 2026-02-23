@@ -1,0 +1,33 @@
+name: CableNews Daily Newsletter
+
+on:
+  schedule:
+    - cron: '0 11 * * *'  # 11:00 UTC = 6:00 AM Colombia (UTC-5)
+  workflow_dispatch:        # Manual trigger button
+
+jobs:
+  send-newsletter:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restore dependencies
+        run: dotnet restore CableNews.Worker/CableNews.Worker.csproj
+
+      - name: Build
+        run: dotnet build CableNews.Worker/CableNews.Worker.csproj -c Release --no-restore
+
+      - name: Run Newsletter Agent
+        env:
+          DOTNET_ENVIRONMENT: Production
+          Gemini__ApiKey: ${{ secrets.GEMINI_API_KEY }}
+          Smtp__Password: ${{ secrets.SMTP_PASSWORD }}
+        run: dotnet run --project CableNews.Worker/CableNews.Worker.csproj -c Release --no-build
