@@ -61,6 +61,7 @@ public class GoogleNewsFeedProvider : INewsFeedProvider
                 {
                     var title = item.Element("title")?.Value ?? string.Empty;
                     var googleLink = item.Element("link")?.Value ?? string.Empty;
+                    var description = item.Element("description")?.Value ?? string.Empty;
                     var pubDateStr = item.Element("pubDate")?.Value;
                     
                     DateTime.TryParse(pubDateStr, out var pubDate);
@@ -71,6 +72,8 @@ public class GoogleNewsFeedProvider : INewsFeedProvider
                         continue;
                     }
 
+                    var articleUrl = ExtractUrlFromDescription(description) ?? googleLink;
+
                     var hash = ComputeSha256(title);
 
                     if (!allArticles.Any(a => a.Hash == hash))
@@ -79,7 +82,7 @@ public class GoogleNewsFeedProvider : INewsFeedProvider
                         {
                             Hash = hash,
                             Title = title,
-                            Url = googleLink,
+                            Url = articleUrl,
                             PublishedAt = pubDate,
                             CountryCode = countryConfig.Code,
                             Summary = string.Empty
@@ -134,9 +137,12 @@ public class GoogleNewsFeedProvider : INewsFeedProvider
         return resolvedArticles.ToList();
     }
 
+    private static bool IsGoogleRedirectUrl(string url) =>
+        url.Contains("google.com/rss/articles") || url.Contains("news.google.com");
+
     private async Task<string> ResolveGoogleRedirectAsync(string googleUrl, CancellationToken cancellationToken)
     {
-        if (!googleUrl.Contains("news.google.com"))
+        if (!IsGoogleRedirectUrl(googleUrl))
             return googleUrl;
 
         try
@@ -186,6 +192,29 @@ public class GoogleNewsFeedProvider : INewsFeedProvider
             if (!url.Contains("google.com") && Uri.TryCreate(url, UriKind.Absolute, out _))
                 return System.Net.WebUtility.HtmlDecode(url);
         }
+
+        return null;
+    }
+
+    private static string? ExtractUrlFromDescription(string description)
+    {
+        if (string.IsNullOrWhiteSpace(description))
+            return null;
+
+        var decoded = System.Net.WebUtility.HtmlDecode(description);
+        var hrefIndex = decoded.IndexOf("href=", StringComparison.OrdinalIgnoreCase);
+        if (hrefIndex < 0)
+            return null;
+
+        var quoteChar = decoded.Length > hrefIndex + 5 ? decoded[hrefIndex + 5] : '"';
+        var urlStart = hrefIndex + 6;
+        var urlEnd = decoded.IndexOf(quoteChar, urlStart);
+        if (urlEnd <= urlStart)
+            return null;
+
+        var url = decoded[urlStart..urlEnd];
+        if (!url.Contains("google.com") && Uri.TryCreate(url, UriKind.Absolute, out _))
+            return url;
 
         return null;
     }
