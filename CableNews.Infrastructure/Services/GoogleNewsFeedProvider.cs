@@ -148,7 +148,7 @@ public class GoogleNewsFeedProvider : INewsFeedProvider
         try
         {
             using var request = new HttpRequestMessage(HttpMethod.Get, googleUrl);
-            request.Headers.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
+            request.Headers.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36");
             request.Headers.Add("Accept", "text/html");
 
             var response = await _httpClient.SendAsync(request, cancellationToken);
@@ -158,13 +158,81 @@ public class GoogleNewsFeedProvider : INewsFeedProvider
                 return response.RequestMessage.RequestUri.ToString();
 
             var html = await response.Content.ReadAsStringAsync(cancellationToken);
+
+            // Fetch signature and timestamp from the HTML page
+            var signature = ExtractAttribute(html, "data-n-a-sg=\"");
+            var timestamp = ExtractAttribute(html, "data-n-a-ts=\"");
+            
+            var base64Str = googleUrl.Split(new[] { "articles/", "read/" }, StringSplitOptions.RemoveEmptyEntries).LastOrDefault()?.Split('?').FirstOrDefault();
+
+            if (!string.IsNullOrEmpty(signature) && !string.IsNullOrEmpty(timestamp) && !string.IsNullOrEmpty(base64Str))
+            {
+                var payloadStr = $"[\"garturlreq\",[[\"X\",\"X\",[\"X\",\"X\"],null,null,1,1,\"US:en\",null,1,null,null,null,null,null,0,1],\"X\",\"X\",1,[1,1,1],1,1,null,0,0,null,0],\"{base64Str}\",{timestamp},\"{signature}\"]";
+                var reqData = $"[[[\"Fbv4je\",\"{payloadStr.Replace("\"", "\\\"")}\",null,\"generic\"]]]";
+                
+                var content = new FormUrlEncodedContent(new[] { new KeyValuePair<string, string>("f.req", reqData) });
+                
+                using var batchRequest = new HttpRequestMessage(HttpMethod.Post, "https://news.google.com/_/DotsSplashUi/data/batchexecute")
+                {
+                    Content = content
+                };
+                batchRequest.Headers.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
+
+                var batchResponse = await _httpClient.SendAsync(batchRequest, cancellationToken);
+                var batchJsonStr = await batchResponse.Content.ReadAsStringAsync(cancellationToken);
+                
+                var decodedUrl = ParseBatchExecuteResponse(batchJsonStr);
+                if (decodedUrl != null) 
+                    return decodedUrl;
+            }
+
+            // Fallback for older formats
             var extracted = ExtractUrlFromHtml(html);
             if (extracted is not null)
                 return extracted;
         }
-        catch { }
+        catch (Exception ex)
+        {
+            _logger.LogWarning("Error resolving Google News URL: {Url}. Msg: {Msg}", googleUrl, ex.Message);
+        }
 
         return googleUrl;
+    }
+
+    private static string? ExtractAttribute(string html, string attributeName)
+    {
+        var index = html.IndexOf(attributeName, StringComparison.OrdinalIgnoreCase);
+        if (index < 0) return null;
+        var start = index + attributeName.Length;
+        var end = html.IndexOf('"', start);
+        if (end < 0) return null;
+        return html[start..end];
+    }
+    
+    private static string? ParseBatchExecuteResponse(string responseText)
+    {
+        try
+        {
+            var splitPos = responseText.IndexOf("\n\n");
+            if (splitPos > -1)
+            {
+                var jsonStr = responseText.Substring(splitPos).Trim();
+                using var doc = System.Text.Json.JsonDocument.Parse(jsonStr);
+                
+                var firstElement = doc.RootElement.EnumerateArray().FirstOrDefault();
+                if (firstElement.ValueKind == System.Text.Json.JsonValueKind.Array)
+                {
+                    var innerJsonStr = firstElement.EnumerateArray().ElementAtOrDefault(2).GetString();
+                    if (!string.IsNullOrEmpty(innerJsonStr))
+                    {
+                        using var innerDoc = System.Text.Json.JsonDocument.Parse(innerJsonStr);
+                        return innerDoc.RootElement.EnumerateArray().ElementAtOrDefault(1).GetString();
+                    }
+                }
+            }
+        }
+        catch { }
+        return null;
     }
 
     private static string? ExtractUrlFromHtml(string html)
