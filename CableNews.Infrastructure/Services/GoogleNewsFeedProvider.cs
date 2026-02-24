@@ -42,6 +42,13 @@ public class GoogleNewsFeedProvider : INewsFeedProvider
         AddQueryGroup(countryConfig.SalesIntelligence);
         AddQueryGroup(countryConfig.KeyCompetitors);
 
+        // Dedicated query for Nexans brand (so it always appears as a category)
+        if (!string.IsNullOrWhiteSpace(countryConfig.LocalNexansBrand))
+        {
+            var days = Math.Max(1, agentConfig.LookbackHours / 24);
+            queries.Add($"(Nexans OR \"{countryConfig.LocalNexansBrand}\") {countryConfig.Name} when:{days}d");
+        }
+
         var allArticles = new List<Article>();
 
         foreach (var query in queries)
@@ -158,49 +165,76 @@ public class GoogleNewsFeedProvider : INewsFeedProvider
 
         try
         {
-            using var request = new HttpRequestMessage(HttpMethod.Get, googleUrl);
-            request.Headers.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36");
-            request.Headers.Add("Accept", "text/html");
+            var base64Str = googleUrl
+                .Split(new[] { "articles/", "read/" }, StringSplitOptions.RemoveEmptyEntries)
+                .LastOrDefault()
+                ?.Split('?')
+                .FirstOrDefault();
 
-            var response = await _httpClient.SendAsync(request, cancellationToken);
+            if (string.IsNullOrEmpty(base64Str))
+                return googleUrl;
 
-            if (response.RequestMessage?.RequestUri is not null &&
-                !response.RequestMessage.RequestUri.Host.Contains("google.com"))
-                return response.RequestMessage.RequestUri.ToString();
+            // Step 1: Fetch signature using the articles/ URL (not rss/articles/)
+            var articlePageUrl = $"https://news.google.com/articles/{base64Str}";
+            string? signature = null;
+            string? timestamp = null;
 
-            var html = await response.Content.ReadAsStringAsync(cancellationToken);
-
-            // Fetch signature and timestamp from the HTML page
-            var signature = ExtractAttribute(html, "data-n-a-sg=\"");
-            var timestamp = ExtractAttribute(html, "data-n-a-ts=\"");
-            
-            var base64Str = googleUrl.Split(new[] { "articles/", "read/" }, StringSplitOptions.RemoveEmptyEntries).LastOrDefault()?.Split('?').FirstOrDefault();
-
-            if (!string.IsNullOrEmpty(signature) && !string.IsNullOrEmpty(timestamp) && !string.IsNullOrEmpty(base64Str))
+            foreach (var fetchUrl in new[] { articlePageUrl, googleUrl })
             {
-                var payloadStr = $"[\"garturlreq\",[[\"X\",\"X\",[\"X\",\"X\"],null,null,1,1,\"US:en\",null,1,null,null,null,null,null,0,1],\"X\",\"X\",1,[1,1,1],1,1,null,0,0,null,0],\"{base64Str}\",{timestamp},\"{signature}\"]";
-                var reqData = $"[[[\"Fbv4je\",\"{payloadStr.Replace("\"", "\\\"")}\",null,\"generic\"]]]";
-                
+                using var request = new HttpRequestMessage(HttpMethod.Get, fetchUrl);
+                request.Headers.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36");
+                request.Headers.Add("Accept", "text/html,application/xhtml+xml");
+
+                var response = await _httpClient.SendAsync(request, cancellationToken);
+
+                if (response.RequestMessage?.RequestUri is not null &&
+                    !response.RequestMessage.RequestUri.Host.Contains("google.com"))
+                    return response.RequestMessage.RequestUri.ToString();
+
+                var html = await response.Content.ReadAsStringAsync(cancellationToken);
+
+                signature = ExtractAttribute(html, "data-n-a-sg=\"");
+                timestamp = ExtractAttribute(html, "data-n-a-ts=\"");
+
+                if (!string.IsNullOrEmpty(signature) && !string.IsNullOrEmpty(timestamp))
+                    break;
+
+                // Fallback: try extracting URL directly from older redirect HTML
+                var extracted = ExtractUrlFromHtml(html);
+                if (extracted is not null)
+                    return extracted;
+            }
+
+            // Step 2: Call batchexecute RPC if we have credentials
+            if (!string.IsNullOrEmpty(signature) && !string.IsNullOrEmpty(timestamp))
+            {
+                var payloadInner = $"[\"garturlreq\",[[\"X\",\"X\",[\"X\",\"X\"],null,null,1,1,\"US:en\",null,1,null,null,null,null,null,0,1],\"X\",\"X\",1,[1,1,1],1,1,null,0,0,null,0],\"{base64Str}\",{timestamp},\"{signature}\"]";
+                var reqData = $"[[[\"Fbv4je\",{System.Text.Json.JsonSerializer.Serialize(payloadInner)},null,\"generic\"]]]";
+
                 var content = new FormUrlEncodedContent(new[] { new KeyValuePair<string, string>("f.req", reqData) });
-                
+
                 using var batchRequest = new HttpRequestMessage(HttpMethod.Post, "https://news.google.com/_/DotsSplashUi/data/batchexecute")
                 {
                     Content = content
                 };
-                batchRequest.Headers.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
+                batchRequest.Headers.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36");
 
                 var batchResponse = await _httpClient.SendAsync(batchRequest, cancellationToken);
                 var batchJsonStr = await batchResponse.Content.ReadAsStringAsync(cancellationToken);
-                
-                var decodedUrl = ParseBatchExecuteResponse(batchJsonStr);
-                if (decodedUrl != null) 
-                    return decodedUrl;
-            }
 
-            // Fallback for older formats
-            var extracted = ExtractUrlFromHtml(html);
-            if (extracted is not null)
-                return extracted;
+                var decodedUrl = ParseBatchExecuteResponse(batchJsonStr);
+                if (decodedUrl != null)
+                {
+                    _logger.LogDebug("Resolved Google URL via batchexecute: {Url}", decodedUrl);
+                    return decodedUrl;
+                }
+
+                _logger.LogDebug("batchexecute returned no URL. Response snippet: {Snippet}", batchJsonStr.Length > 200 ? batchJsonStr[..200] : batchJsonStr);
+            }
+            else
+            {
+                _logger.LogWarning("Could not extract signature/timestamp for Google URL: {Url}", googleUrl);
+            }
         }
         catch (Exception ex)
         {

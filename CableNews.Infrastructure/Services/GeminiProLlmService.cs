@@ -58,8 +58,9 @@ Clasifica las noticias según estas categorías (omite las que no tengan noticia
 - Telecom y Data Centers
 - Licitaciones y CAPEX
 - Macro y Regulación
-- 🏢 Movimientos de la Competencia (SOLO si existen eventos relevantes y verificables sobre {competitorsFocus}: alianzas, nuevos productos, expansión, adjudicaciones o problemas operativos)
-- 🎯 Oportunidades Comerciales (SOLO si existen eventos relevantes y verificables: nuevos proyectos anunciados, adjudicaciones, cierres financieros, nuevas plantas, expansiones, licitaciones abiertas o convocatorias)
+- 🏢 Movimientos de la Competencia (SIEMPRE INCLUYE esta sección. Busca en todas las noticias cualquier mención a: {competitorsFocus}. Incluye alianzas, contratos, expansiones, nuevos productos, adjudicaciones o problemas operativos de estos competidores. Si no hay noticias de competidores, escribe: Sin noticias significativas de la competencia en este período.)
+- 📰 Nexans en {country.Name} (SIEMPRE INCLUYE esta sección. Busca cualquier mención a Nexans o {country.LocalNexansBrand}. Incluye contratos, proyectos, menciones en medios, opiniones de analistas. Si no hay noticias, escribe: Sin menciones de Nexans en {country.Name} en este período.)
+- 🎯 Oportunidades Comerciales (SOLO si existen eventos verificables: nuevos proyectos anunciados, adjudicaciones, cierres financieros, licitaciones abiertas o convocatorias)
 
 ORDEN:
 - Dentro de cada categoría, ordena las noticias por impacto comercial: 🔴 primero, luego 🟡, luego 🟢.
