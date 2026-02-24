@@ -32,7 +32,8 @@ public class GeminiProLlmService : ILlmSummarizerService
         var articlesText = new StringBuilder($"Noticias para {country.Name}:\n\n");
         foreach (var article in articles)
         {
-            articlesText.AppendLine($"- {article.Title} - URL: {article.Url}");
+            var dateStr = article.PublishedAt != default ? article.PublishedAt.ToString("yyyy-MM-dd") : "Fecha desconocida";
+            articlesText.AppendLine($"- [{dateStr}] {article.Title} - URL: {article.Url}");
         }
 
       var competitorsFocus = string.IsNullOrWhiteSpace(country.LocalNexansBrand)
@@ -44,7 +45,7 @@ Tu tarea es leer las noticias suministradas y generar un Reporte Ejecutivo en HT
 
 REGLAS CRÍTICAS:
 1. Solo debes incluir noticias que sean relevantes para {country.Name}. Ignora completamente noticias de otros países.
-2. PRIORIZA LA ACTUALIDAD: Selecciona las noticias más recientes posibles, idealmente las ocurridas el día de hoy o en las últimas 24 horas. Descarta noticias antiguas si hay eventos más recientes sobre el mismo tema.
+2. ACTUALIDAD (15 DÍAS): Tienes noticias de los últimos 15 días. Selecciona las más relevantes y recientes. Si hay actualizaciones sobre un mismo tema, conserva solo la más reciente. Muestra SIEMPRE la fecha de la noticia (fecha entre corchetes).
 3. DEDUPLICACIÓN: Si múltiples noticias describen el mismo evento (misma obra, licitación, proyecto, anuncio, incidente o decisión regulatoria), incluye solo la versión más reciente o la más completa.
 4. SOLO HECHOS: Solo puedes usar información explícitamente contenida en las noticias suministradas. No infieras montos, adjudicaciones, fechas, empresas involucradas u “oportunidades” si no están claramente mencionadas en el texto o metadata proporcionada.
 5. NO inventes información.

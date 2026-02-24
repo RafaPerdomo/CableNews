@@ -29,7 +29,8 @@ public class GoogleNewsFeedProvider : INewsFeedProvider
             if (validTerms.Count > 0)
             {
                 var joined = string.Join(" OR ", validTerms);
-                queries.Add($"({joined}) location:{countryConfig.Name} when:1d");
+                var days = Math.Max(1, agentConfig.LookbackHours / 24);
+                queries.Add($"({joined}) location:{countryConfig.Name} when:{days}d");
             }
         }
 
@@ -39,6 +40,7 @@ public class GoogleNewsFeedProvider : INewsFeedProvider
         AddQueryGroup(countryConfig.MacroSignals);
         AddQueryGroup(countryConfig.ExtraEntities);
         AddQueryGroup(countryConfig.SalesIntelligence);
+        AddQueryGroup(countryConfig.KeyCompetitors);
 
         var allArticles = new List<Article>();
 
@@ -65,6 +67,15 @@ public class GoogleNewsFeedProvider : INewsFeedProvider
                     var pubDateStr = item.Element("pubDate")?.Value;
                     
                     DateTime.TryParse(pubDateStr, out var pubDate);
+
+                    if (pubDate != default)
+                    {
+                        var timeSpan = DateTime.UtcNow - pubDate.ToUniversalTime();
+                        if (timeSpan.TotalHours > agentConfig.LookbackHours || timeSpan.TotalHours < -24)
+                        {
+                            continue;
+                        }
+                    }
 
                     if (string.IsNullOrWhiteSpace(title) || string.IsNullOrWhiteSpace(googleLink)) 
                     {
