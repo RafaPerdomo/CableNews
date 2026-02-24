@@ -4,5 +4,5 @@ using CableNews.Domain.Entities;
 
 public interface ILlmSummarizerService
 {
-    Task<string> SummarizeArticlesAsync(List<Article> articles, string countryName, CancellationToken cancellationToken);
+    Task<string> SummarizeArticlesAsync(List<Article> articles, CountryConfig country, CancellationToken cancellationToken);
 }

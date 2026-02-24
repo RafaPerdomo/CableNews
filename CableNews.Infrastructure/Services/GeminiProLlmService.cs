@@ -23,19 +23,25 @@ public class GeminiProLlmService : ILlmSummarizerService
         _logger = logger;
     }
 
-    public async Task<string> SummarizeArticlesAsync(List<Article> articles, string countryName, CancellationToken cancellationToken)
+    public async Task<string> SummarizeArticlesAsync(List<Article> articles, CountryConfig country, CancellationToken cancellationToken)
     {
+        if (articles.Count == 0) return string.Empty;
+
         var url = $"https://generativelanguage.googleapis.com/v1beta/models/{_config.ModelId}:generateContent?key={_config.ApiKey}";
 
-        var articlesText = new StringBuilder($"Noticias para {countryName}:\n\n");
+        var articlesText = new StringBuilder($"Noticias para {country.Name}:\n\n");
         foreach (var article in articles)
         {
             articlesText.AppendLine($"- {article.Title} - URL: {article.Url}");
         }
 
+        var competitorsFocus = string.IsNullOrWhiteSpace(country.LocalNexansBrand)
+            ? "Nexans y sus competidores"
+            : $"la marca local de Nexans ({country.LocalNexansBrand}) y competidores como {string.Join(", ", country.KeyCompetitors)}";
+
         var systemInstruction = $@"Eres un analista experto de nivel ejecutivo especializado en energía, minería e infraestructura.
-Tu tarea es leer las noticias suministradas y generar un Reporte Ejecutivo en HTML EXCLUSIVAMENTE sobre {countryName}.
-IMPORTANTE: Solo debes incluir noticias que sean relevantes para {countryName}. Ignora completamente noticias de otros países.
+Tu tarea es leer las noticias suministradas y generar un Reporte Ejecutivo en HTML EXCLUSIVAMENTE sobre {country.Name}.
+IMPORTANTE: Solo debes incluir noticias que sean relevantes para {country.Name}. Ignora completamente noticias de otros países.
 
 Clasifica las noticias según estas categorías (omite las que no tengan noticias):
 - Energía y Redes
@@ -45,10 +51,10 @@ Clasifica las noticias según estas categorías (omite las que no tengan noticia
 - Telecom y Data Centers
 - Licitaciones y CAPEX
 - Macro y Regulación
-- 🎯 Oportunidades Comerciales (noticias sobre nuevos proyectos anunciados, adjudicaciones, cierres financieros, nuevas plantas, expansiones, licitaciones abiertas, convocatorias, o movimientos de competidores como Prysmian, Centelsa, Procables o Condumex)
+- 🎯 Oportunidades Comerciales (noticias sobre nuevos proyectos anunciados, adjudicaciones, cierres financieros, nuevas plantas, expansiones, licitaciones abiertas, convocatorias, o movimientos de {competitorsFocus})
 
 Formato HTML estricto:
-<h1>Reporte Ejecutivo: {countryName}</h1>
+<h1>Reporte Ejecutivo: {country.Name}</h1>
 Bajo el título del país, crea un <h2> por Categoría.
 Bajo cada categoría, lista las noticias usando <ul><li>.
 Formato por noticia: <strong>Título:</strong> Resumen ejecutivo (máximo 2 líneas). <a href='URL'>Enlace</a>.
@@ -59,8 +65,8 @@ Para la categoría 🎯 Oportunidades Comerciales, agrega un indicador de urgenc
 - 🟢 Baja: Movimiento de competidor o señal de mercado a monitorear
 
 AL FINAL:
-Agrega <h2>Recomendaciones Estratégicas del Gerente de Marketing – {countryName}</h2>.
-Asume el rol de Gerente de Marketing para {countryName} y proporciona 1-2 párrafos sobre cómo las noticias representan oportunidades o riesgos para nuestra empresa (fabricante de cables y soluciones eléctricas/telecom), y qué acciones de prospección sugieres. Sé MUY específico mencionando nombres de empresas, proyectos o licitaciones del reporte.
+Agrega <h2>Recomendaciones Estratégicas del Gerente de Marketing – {country.Name}</h2>.
+Asume el rol de Gerente de Marketing para {country.Name} y proporciona 1-2 párrafos sobre cómo las noticias representan oportunidades o riesgos para nuestra empresa (fabricante de cables y soluciones eléctricas/telecom), y qué acciones de prospección sugieres. Sé MUY específico mencionando nombres de empresas, proyectos o licitaciones del reporte.
 
 NO inventes información. Devuelve SOLO el HTML, sin markdown ni saludos extras.";
 

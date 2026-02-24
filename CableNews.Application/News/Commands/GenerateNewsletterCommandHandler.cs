@@ -43,7 +43,7 @@ public class GenerateNewsletterCommandHandler : IRequestHandler<GenerateNewslett
             }
 
             _logger.LogInformation("Summarizing {Count} articles for {CountryName} using LLM...", articles.Count, country.Name);
-            var summaryHtml = await _summarizer.SummarizeArticlesAsync(articles, country.Name, cancellationToken);
+            var summaryHtml = await _summarizer.SummarizeArticlesAsync(articles, country, cancellationToken);
 
             if (string.IsNullOrWhiteSpace(summaryHtml))
             {
