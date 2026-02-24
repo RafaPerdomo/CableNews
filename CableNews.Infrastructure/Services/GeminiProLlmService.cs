@@ -41,7 +41,10 @@ public class GeminiProLlmService : ILlmSummarizerService
 
         var systemInstruction = $@"Eres un analista experto de nivel ejecutivo especializado en energía, minería e infraestructura.
 Tu tarea es leer las noticias suministradas y generar un Reporte Ejecutivo en HTML EXCLUSIVAMENTE sobre {country.Name}.
-IMPORTANTE: Solo debes incluir noticias que sean relevantes para {country.Name}. Ignora completamente noticias de otros países.
+
+REGLAS CRÍTICAS:
+1. Solo debes incluir noticias que sean relevantes para {country.Name}. Ignora completamente noticias de otros países.
+2. PRIORIZA LA ACTUALIDAD: Selecciona las noticias más recientes posibles, idealmente las ocurridas el día de hoy o en las últimas 24 horas. Descarta noticias antiguas si hay eventos más recientes sobre el mismo tema.
 
 Clasifica las noticias según estas categorías (omite las que no tengan noticias):
 - Energía y Redes
@@ -51,18 +54,18 @@ Clasifica las noticias según estas categorías (omite las que no tengan noticia
 - Telecom y Data Centers
 - Licitaciones y CAPEX
 - Macro y Regulación
-- 🎯 Oportunidades Comerciales (noticias sobre nuevos proyectos anunciados, adjudicaciones, cierres financieros, nuevas plantas, expansiones, licitaciones abiertas, convocatorias, o movimientos de {competitorsFocus})
+- 🏢 Movimientos de la Competencia (noticias exclusivas sobre {competitorsFocus}: alianzas, nuevos productos, expansión, adjudicaciones o problemas operativos)
+- 🎯 Oportunidades Comerciales (noticias generales sobre nuevos proyectos anunciados, adjudicaciones, cierres financieros, nuevas plantas, expansiones, licitaciones abiertas o convocatorias)
 
 Formato HTML estricto:
 <h1>Reporte Ejecutivo: {country.Name}</h1>
 Bajo el título del país, crea un <h2> por Categoría.
 Bajo cada categoría, lista las noticias usando <ul><li>.
 Formato por noticia: <strong>Título:</strong> Resumen ejecutivo (máximo 2 líneas). <a href='URL'>Enlace</a>.
-
-Para la categoría 🎯 Oportunidades Comerciales, agrega un indicador de urgencia al inicio de cada noticia:
-- 🔴 Alta: Licitación abierta, adjudicación reciente, o proyecto con cierre financiero próximo
-- 🟡 Media: Nuevo proyecto anunciado o expansión confirmada
-- 🟢 Baja: Movimiento de competidor o señal de mercado a monitorear
+Usa emojis de semáforo antes del título para indicar la relevancia comercial para un vendedor de cables:
+- 🔴 Alta: Oportunidad de venta directa (ej. licitación abierta, construcción de planta, nueva línea de transmisión)
+- 🟡 Media: Contexto de la industria o política que podría desencadenar demanda futura
+- 🟢 Baja: Señal de mercado a monitorear
 
 AL FINAL:
 Agrega <h2>Recomendaciones Estratégicas del Gerente de Marketing – {country.Name}</h2>.
