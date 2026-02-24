@@ -21,16 +21,21 @@ public class GoogleNewsFeedProvider : INewsFeedProvider
 
     public async Task<List<Article>> FetchNewsAsync(CountryConfig countryConfig, NewsAgentConfig agentConfig, CancellationToken cancellationToken)
     {
+        var days = Math.Max(1, agentConfig.LookbackHours / 24);
+        var locationSuffix = countryConfig.IsGlobal ? string.Empty : $" location:{countryConfig.Name}";
         var queries = new List<string>();
 
         void AddQueryGroup(IEnumerable<string> terms)
         {
             var validTerms = terms.Where(t => !string.IsNullOrWhiteSpace(t)).ToList();
-            if (validTerms.Count > 0)
+            if (validTerms.Count == 0) return;
+
+            // Batch into chunks of 8: long single-query strings get truncated by Google,
+            // smaller batches return more distinct results.
+            foreach (var chunk in validTerms.Chunk(8))
             {
-                var joined = string.Join(" OR ", validTerms);
-                var days = Math.Max(1, agentConfig.LookbackHours / 24);
-                queries.Add($"({joined}) location:{countryConfig.Name} when:{days}d");
+                var joined = string.Join(" OR ", chunk);
+                queries.Add($"({joined}){locationSuffix} when:{days}d");
             }
         }
 
@@ -42,11 +47,13 @@ public class GoogleNewsFeedProvider : INewsFeedProvider
         AddQueryGroup(countryConfig.SalesIntelligence);
         AddQueryGroup(countryConfig.KeyCompetitors);
 
-        // Dedicated query for Nexans brand (so it always appears as a category)
         if (!string.IsNullOrWhiteSpace(countryConfig.LocalNexansBrand))
         {
-            var days = Math.Max(1, agentConfig.LookbackHours / 24);
-            queries.Add($"(Nexans OR \"{countryConfig.LocalNexansBrand}\") {countryConfig.Name} when:{days}d");
+            var brandTerm = $"(Nexans OR \"{countryConfig.LocalNexansBrand}\")";
+            if (countryConfig.IsGlobal)
+                queries.Add($"{brandTerm} when:{days}d");
+            else
+                queries.Add($"{brandTerm}{locationSuffix} when:{days}d");
         }
 
         var allArticles = new List<Article>();
@@ -78,10 +85,8 @@ public class GoogleNewsFeedProvider : INewsFeedProvider
                     if (pubDate != default)
                     {
                         var timeSpan = DateTime.UtcNow - pubDate.ToUniversalTime();
-                        if (timeSpan.TotalHours > agentConfig.LookbackHours || timeSpan.TotalHours < -24)
-                        {
+                        if (timeSpan.TotalDays > 35 || timeSpan.TotalHours < -48)
                             continue;
-                        }
                     }
 
                     if (string.IsNullOrWhiteSpace(title) || string.IsNullOrWhiteSpace(googleLink)) 
@@ -118,6 +123,60 @@ public class GoogleNewsFeedProvider : INewsFeedProvider
 
             await Task.Delay(1500, cancellationToken);
         }
+
+        // Fetch static industry/procurement RSS feeds (no query building, direct URL)
+        foreach (var feedUrl in countryConfig.ExtraRssFeeds)
+        {
+            try
+            {
+                _logger.LogInformation("Fetching static RSS feed {Url} for {Country}", feedUrl, countryConfig.Name);
+                var response = await _httpClient.GetStringAsync(feedUrl, cancellationToken);
+                var xdoc = XDocument.Parse(response);
+                var items = xdoc.Descendants("item").Take(50).ToList();
+                int added = 0;
+
+                foreach (var item in items)
+                {
+                    var title = item.Element("title")?.Value ?? string.Empty;
+                    var link = item.Element("link")?.Value ?? string.Empty;
+                    var pubDateStr = item.Element("pubDate")?.Value;
+
+                    DateTime.TryParse(pubDateStr, out var pubDate);
+
+                    if (pubDate != default)
+                    {
+                        var timeSpan = DateTime.UtcNow - pubDate.ToUniversalTime();
+                        if (timeSpan.TotalDays > 35 || timeSpan.TotalHours < -48)
+                            continue;
+                    }
+
+                    if (string.IsNullOrWhiteSpace(title) || string.IsNullOrWhiteSpace(link)) continue;
+
+                    var hash = ComputeSha256(title);
+                    if (!allArticles.Any(a => a.Hash == hash))
+                    {
+                        allArticles.Add(new Article
+                        {
+                            Hash = hash,
+                            Title = title,
+                            Url = link,
+                            PublishedAt = pubDate,
+                            CountryCode = countryConfig.Code,
+                            Summary = string.Empty
+                        });
+                        added++;
+                    }
+                }
+
+                _logger.LogInformation("Static feed {Url} added {Count} articles for {Country}", feedUrl, added, countryConfig.Name);
+                await Task.Delay(500, cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning("Failed to fetch static RSS {Url}: {Msg}", feedUrl, ex.Message);
+            }
+        }
+
 
         var orderedArticles = allArticles
             .OrderByDescending(a => a.PublishedAt)
@@ -211,7 +270,8 @@ public class GoogleNewsFeedProvider : INewsFeedProvider
                 var payloadInner = $"[\"garturlreq\",[[\"X\",\"X\",[\"X\",\"X\"],null,null,1,1,\"US:en\",null,1,null,null,null,null,null,0,1],\"X\",\"X\",1,[1,1,1],1,1,null,0,0,null,0],\"{base64Str}\",{timestamp},\"{signature}\"]";
                 var reqData = $"[[[\"Fbv4je\",{System.Text.Json.JsonSerializer.Serialize(payloadInner)},null,\"generic\"]]]";
 
-                var content = new FormUrlEncodedContent(new[] { new KeyValuePair<string, string>("f.req", reqData) });
+                var encodedReqData = "f.req=" + Uri.EscapeDataString(reqData);
+                var content = new StringContent(encodedReqData, System.Text.Encoding.UTF8, "application/x-www-form-urlencoded");
 
                 using var batchRequest = new HttpRequestMessage(HttpMethod.Post, "https://news.google.com/_/DotsSplashUi/data/batchexecute")
                 {
@@ -258,21 +318,32 @@ public class GoogleNewsFeedProvider : INewsFeedProvider
     {
         try
         {
-            var splitPos = responseText.IndexOf("\n\n");
-            if (splitPos > -1)
+            // Skip leading garbage like ")]}'" and find the JSON
+            var jsonStart = responseText.IndexOf("[[[");
+            if (jsonStart < 0) jsonStart = responseText.IndexOf("[[");
+            if (jsonStart < 0) return null;
+            
+            var jsonStr = responseText[jsonStart..].Trim();
+            using var doc = System.Text.Json.JsonDocument.Parse(jsonStr);
+
+            // Structure: [ ['wrb.fr', 'Fbv4je', '{inner_json}', ...], ['di',...], ... ]
+            foreach (var element in doc.RootElement.EnumerateArray())
             {
-                var jsonStr = responseText.Substring(splitPos).Trim();
-                using var doc = System.Text.Json.JsonDocument.Parse(jsonStr);
-                
-                var firstElement = doc.RootElement.EnumerateArray().FirstOrDefault();
-                if (firstElement.ValueKind == System.Text.Json.JsonValueKind.Array)
+                if (element.ValueKind != System.Text.Json.JsonValueKind.Array) continue;
+                var items = element.EnumerateArray().ToList();
+                if (items.Count < 3) continue;
+                // item[0] should be 'wrb.fr', item[2] is the inner JSON string
+                var innerJsonStr = items[2].ValueKind == System.Text.Json.JsonValueKind.String
+                    ? items[2].GetString()
+                    : null;
+                if (string.IsNullOrEmpty(innerJsonStr) || !innerJsonStr.StartsWith("[")) continue;
+                using var innerDoc = System.Text.Json.JsonDocument.Parse(innerJsonStr);
+                var innerItems = innerDoc.RootElement.EnumerateArray().ToList();
+                if (innerItems.Count >= 2 && innerItems[1].ValueKind == System.Text.Json.JsonValueKind.String)
                 {
-                    var innerJsonStr = firstElement.EnumerateArray().ElementAtOrDefault(2).GetString();
-                    if (!string.IsNullOrEmpty(innerJsonStr))
-                    {
-                        using var innerDoc = System.Text.Json.JsonDocument.Parse(innerJsonStr);
-                        return innerDoc.RootElement.EnumerateArray().ElementAtOrDefault(1).GetString();
-                    }
+                    var url = innerItems[1].GetString();
+                    if (!string.IsNullOrEmpty(url) && url.StartsWith("http"))
+                        return url;
                 }
             }
         }

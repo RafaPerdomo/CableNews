@@ -52,7 +52,7 @@ public class GenerateNewsletterCommandHandler : IRequestHandler<GenerateNewslett
             }
 
             _logger.LogInformation("Sending executive newsletter for {CountryName} via Email...", country.Name);
-            await _emailService.SendNewsletterAsync(summaryHtml, country.Name, cancellationToken);
+            await _emailService.SendNewsletterAsync(summaryHtml, country.Name, country.LocalNexansBrand ?? country.Name, country.BrandColor ?? "#E1251B", cancellationToken);
             
             _logger.LogInformation("Newsletter for {CountryName} generated and sent successfully.", country.Name);
             anySuccess = true;

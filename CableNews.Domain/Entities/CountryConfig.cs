@@ -8,6 +8,9 @@ public class CountryConfig : BaseEntity
     public required string Name { get; init; }
     
     public string LocalNexansBrand { get; init; } = string.Empty;
+    public string BrandColor { get; init; } = "#E1251B";
+    public bool IsGlobal { get; init; } = false;
+    public List<string> ExtraRssFeeds { get; init; } = [];
     public List<string> KeyCompetitors { get; init; } = new();
     public List<string> DemandDrivers { get; init; } = new();
     public List<string> Institutions { get; init; } = [];

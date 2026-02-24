@@ -2,5 +2,5 @@
 
 public interface IEmailService
 {
-    Task SendNewsletterAsync(string htmlContent, string countryName, CancellationToken cancellationToken);
+    Task SendNewsletterAsync(string htmlContent, string countryName, string localBrand, string brandColor, CancellationToken cancellationToken);
 }
