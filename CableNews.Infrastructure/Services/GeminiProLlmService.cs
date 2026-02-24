@@ -35,16 +35,19 @@ public class GeminiProLlmService : ILlmSummarizerService
             articlesText.AppendLine($"- {article.Title} - URL: {article.Url}");
         }
 
-        var competitorsFocus = string.IsNullOrWhiteSpace(country.LocalNexansBrand)
-            ? "Nexans y sus competidores"
-            : $"la marca local de Nexans ({country.LocalNexansBrand}) y competidores como {string.Join(", ", country.KeyCompetitors)}";
+      var competitorsFocus = string.IsNullOrWhiteSpace(country.LocalNexansBrand)
+    ? "Nexans y sus competidores"
+    : $"la marca local de Nexans ({country.LocalNexansBrand}) y competidores como {string.Join(", ", country.KeyCompetitors)}";
 
-        var systemInstruction = $@"Eres un analista experto de nivel ejecutivo especializado en energía, minería e infraestructura.
+var systemInstruction = $@"Eres un analista experto de nivel ejecutivo especializado en energía, minería e infraestructura.
 Tu tarea es leer las noticias suministradas y generar un Reporte Ejecutivo en HTML EXCLUSIVAMENTE sobre {country.Name}.
 
 REGLAS CRÍTICAS:
 1. Solo debes incluir noticias que sean relevantes para {country.Name}. Ignora completamente noticias de otros países.
 2. PRIORIZA LA ACTUALIDAD: Selecciona las noticias más recientes posibles, idealmente las ocurridas el día de hoy o en las últimas 24 horas. Descarta noticias antiguas si hay eventos más recientes sobre el mismo tema.
+3. DEDUPLICACIÓN: Si múltiples noticias describen el mismo evento (misma obra, licitación, proyecto, anuncio, incidente o decisión regulatoria), incluye solo la versión más reciente o la más completa.
+4. SOLO HECHOS: Solo puedes usar información explícitamente contenida en las noticias suministradas. No infieras montos, adjudicaciones, fechas, empresas involucradas u “oportunidades” si no están claramente mencionadas en el texto o metadata proporcionada.
+5. NO inventes información.
 
 Clasifica las noticias según estas categorías (omite las que no tengan noticias):
 - Energía y Redes
@@ -54,24 +57,38 @@ Clasifica las noticias según estas categorías (omite las que no tengan noticia
 - Telecom y Data Centers
 - Licitaciones y CAPEX
 - Macro y Regulación
-- 🏢 Movimientos de la Competencia (noticias exclusivas sobre {competitorsFocus}: alianzas, nuevos productos, expansión, adjudicaciones o problemas operativos)
-- 🎯 Oportunidades Comerciales (noticias generales sobre nuevos proyectos anunciados, adjudicaciones, cierres financieros, nuevas plantas, expansiones, licitaciones abiertas o convocatorias)
+- 🏢 Movimientos de la Competencia (SOLO si existen eventos relevantes y verificables sobre {competitorsFocus}: alianzas, nuevos productos, expansión, adjudicaciones o problemas operativos)
+- 🎯 Oportunidades Comerciales (SOLO si existen eventos relevantes y verificables: nuevos proyectos anunciados, adjudicaciones, cierres financieros, nuevas plantas, expansiones, licitaciones abiertas o convocatorias)
 
-Formato HTML estricto:
+ORDEN:
+- Dentro de cada categoría, ordena las noticias por impacto comercial: 🔴 primero, luego 🟡, luego 🟢.
+- Si una categoría tiene demasiadas noticias, prioriza las 10-15 más relevantes y recientes.
+
+Formato HTML estricto (HTML válido y bien formado):
 <h1>Reporte Ejecutivo: {country.Name}</h1>
 Bajo el título del país, crea un <h2> por Categoría.
 Bajo cada categoría, lista las noticias usando <ul><li>.
-Formato por noticia: <strong>Título:</strong> Resumen ejecutivo (máximo 2 líneas). <a href='URL'>Enlace</a>.
-Usa emojis de semáforo antes del título para indicar la relevancia comercial para un vendedor de cables:
-- 🔴 Alta: Oportunidad de venta directa (ej. licitación abierta, construcción de planta, nueva línea de transmisión)
-- 🟡 Media: Contexto de la industria o política que podría desencadenar demanda futura
+
+Formato por noticia:
+[emoji semáforo] <strong>Título:</strong> Resumen ejecutivo (máximo 2 líneas, sin exageraciones). <a href='URL'>Enlace</a>.
+
+Semáforo (relevancia comercial para un vendedor de cables):
+- 🔴 Alta: Oportunidad de venta directa (ej. licitación abierta, adjudicación confirmada, construcción de planta, nueva subestación o nueva línea de transmisión, data center anunciado con inversión/contratación)
+- 🟡 Media: Contexto de industria, regulación o inversión que podría desencadenar demanda futura
 - 🟢 Baja: Señal de mercado a monitorear
 
 AL FINAL:
 Agrega <h2>Recomendaciones Estratégicas del Gerente de Marketing – {country.Name}</h2>.
-Asume el rol de Gerente de Marketing para {country.Name} y proporciona 1-2 párrafos sobre cómo las noticias representan oportunidades o riesgos para nuestra empresa (fabricante de cables y soluciones eléctricas/telecom), y qué acciones de prospección sugieres. Sé MUY específico mencionando nombres de empresas, proyectos o licitaciones del reporte.
+Asume el rol de Gerente de Marketing para {country.Name} y proporciona 1-2 párrafos sobre cómo las noticias representan oportunidades o riesgos para nuestra empresa (fabricante de cables y soluciones eléctricas/telecom) y qué acciones de prospección sugieres.
 
-NO inventes información. Devuelve SOLO el HTML, sin markdown ni saludos extras.";
+REGLAS PARA RECOMENDACIONES:
+- Sé MUY específico, mencionando únicamente empresas, proyectos o licitaciones que aparezcan en el reporte.
+- Si no hay suficiente información para recomendar acciones concretas, dilo explícitamente y sugiere qué señales monitorear mañana.
+
+SALIDA:
+- Devuelve SOLO el HTML.
+- NO uses markdown.
+- NO agregues saludos, títulos extra fuera del HTML ni explicaciones adicionales.";
 
         var payload = new
         {
