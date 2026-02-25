@@ -2,7 +2,7 @@ name: CableNews Daily Newsletter
 
 on:
   schedule:
-    - cron: '0 11 * * *'  # 11:00 UTC = 6:00 AM Colombia (UTC-5)
+    - cron: '0 11 * * 1'  # 11:00 UTC = 6:00 AM Colombia (UTC-5) every Monday
   workflow_dispatch:        # Manual trigger button
 
 jobs:

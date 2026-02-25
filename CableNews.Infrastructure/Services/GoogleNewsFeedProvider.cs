@@ -23,6 +23,10 @@ public class GoogleNewsFeedProvider : INewsFeedProvider
     {
         var days = Math.Max(1, agentConfig.LookbackHours / 24);
         var locationSuffix = countryConfig.IsGlobal ? string.Empty : $" location:{countryConfig.Name}";
+        if (!string.IsNullOrWhiteSpace(countryConfig.LocationQuery))
+        {
+            locationSuffix = $" {countryConfig.LocationQuery}";
+        }
         var queries = new List<string>();
 
         void AddQueryGroup(IEnumerable<string> terms)

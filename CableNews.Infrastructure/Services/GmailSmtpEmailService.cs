@@ -44,40 +44,60 @@ public class GmailSmtpEmailService : IEmailService
         var brandLabel = string.IsNullOrWhiteSpace(localBrand) || localBrand == countryName ? "Nexans" : localBrand;
         var color = string.IsNullOrWhiteSpace(brandColor) ? "#E1251B" : brandColor;
 
+        bodyContent = bodyContent.Replace("<h2>", $"<div style=\"background-color:#1a1a2e; border-top:4px solid {color}; padding:12px 15px; margin:30px 0 15px 0;\"><h2 style=\"margin:0; font-size:14px; font-weight:bold; text-transform:uppercase; letter-spacing:1px; color:#ffffff; line-height:1.2;\">");
+        bodyContent = bodyContent.Replace("</h2>", "</h2></div>");
+        bodyContent = bodyContent.Replace("<ul>", "<ul style=\"margin:0 0 20px 0; padding:0 0 0 20px;\">");
+        bodyContent = bodyContent.Replace("<li>", "<li style=\"margin-bottom:12px; font-size:14px; line-height:1.6; color:#1a1a2e;\">");
+        bodyContent = bodyContent.Replace("<p>", "<p style=\"font-size:14px; line-height:1.6; margin:0 0 15px 0; color:#1a1a2e;\">");
+        bodyContent = bodyContent.Replace("<a href=", $"<a style=\"color:{color}; font-weight:bold; text-decoration:none; border-bottom:1px solid {color};\" href=");
+        bodyContent = bodyContent.Replace("<strong>", "<strong style=\"color:#000000;\">");
+
         var styledHtml = $$"""
             <!DOCTYPE html>
             <html lang="es">
             <head>
             <meta charset="UTF-8">
-            <style>
-              body { font-family: 'Segoe UI', Arial, sans-serif; background:#f0f2f5; margin:0; padding:0; color:#1a1a2e; }
-              .wrapper { max-width:960px; margin:20px auto; background:#fff; border-radius:10px; box-shadow:0 2px 14px rgba(0,0,0,0.08); overflow:hidden; }
-              .header { background:{{color}}; color:#fff; padding:28px 40px 22px; }
-              .brand-line { font-size:11px; font-weight:700; letter-spacing:2.5px; text-transform:uppercase; color:rgba(255,255,255,0.75); margin:0 0 8px; }
-              .header h1 { margin:0 0 6px; font-size:22px; font-weight:700; letter-spacing:0.3px; }
-              .header p { color:rgba(255,255,255,0.65); font-size:12px; margin:0; }
-              .content { padding:0 40px 32px; }
-              h2 { font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:1.2px; color:#fff; background:#1a1a2e; margin:24px -40px 12px; padding:10px 40px; border-left:4px solid {{color}}; }
-              ul { margin:0; padding:6px 0 4px 16px; }
-              li { margin-bottom:10px; font-size:13.5px; line-height:1.65; border-left:3px solid #e2e8f4; padding:5px 10px 5px 12px; }
-              a { color:{{color}}; font-weight:600; text-decoration:none; }
-              strong { color:#1a1a2e; }
-              p { font-size:13.5px; line-height:1.7; margin:8px 0; }
-              .footer { text-align:center; font-size:11px; color:#aaa; padding:14px; background:#f0f2f5; border-top:1px solid #e2e8f4; }
-            </style>
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
             </head>
-            <body>
-            <div class="wrapper">
-              <div class="header">
-                <p class="brand-line">{{brandLabel}}</p>
-                <h1>&#128225; Reporte Ejecutivo &mdash; {{countryName}}</h1>
-                <p>{{dateStr}}</p>
-              </div>
-              <div class="content">
-                {{bodyContent}}
-              </div>
-              <div class="footer">CableNews Agent &mdash; Uso interno &mdash; Confidencial</div>
-            </div>
+            <body style="margin:0; padding:0; background-color:#f0f2f5; font-family:'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; color:#1a1a2e;">
+              <table border="0" cellpadding="0" cellspacing="0" width="100%" style="background-color:#f0f2f5; padding:20px 0;">
+                <tr>
+                  <td align="center">
+                    <!--[if (gte mso 9)|(IE)]>
+                    <table align="center" border="0" cellspacing="0" cellpadding="0" width="650">
+                    <tr>
+                    <td align="center" valign="top" width="650">
+                    <![endif]-->
+                    <table border="0" cellpadding="0" cellspacing="0" width="100%" style="max-width:650px; background-color:#ffffff; border:1px solid #e2e8f4; text-align:left;">
+                      <tr>
+                        <td style="background-color:{{color}}; padding:25px 35px;">
+                          <p style="font-size:11px; font-weight:bold; letter-spacing:2px; text-transform:uppercase; color:#ffffff; margin:0 0 5px 0; opacity:0.9;">{{brandLabel}}</p>
+                          <h1 style="margin:0; font-size:22px; font-weight:bold; color:#ffffff; line-height:1.3;">&#128225; Reporte Ejecutivo &mdash; {{countryName}}</h1>
+                          <p style="color:#ffffff; font-size:13px; margin:8px 0 0 0; opacity:0.9;">{{dateStr}}</p>
+                        </td>
+                      </tr>
+                      <tr>
+                        <td style="padding:25px 35px;">
+                          {{bodyContent}}
+                        </td>
+                      </tr>
+                    </table>
+                    <!--[if (gte mso 9)|(IE)]>
+                    </td>
+                    </tr>
+                    </table>
+                    <![endif]-->
+                    
+                    <table border="0" cellpadding="0" cellspacing="0" width="100%" style="max-width:650px;">
+                      <tr>
+                        <td align="center" style="padding:20px; font-size:12px; color:#888888;">
+                          CableNews Agent &mdash; Uso interno &mdash; Confidencial
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+              </table>
             </body>
             </html>
             """;

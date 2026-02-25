@@ -10,6 +10,7 @@ public class CountryConfig : BaseEntity
     public string LocalNexansBrand { get; init; } = string.Empty;
     public string BrandColor { get; init; } = "#E1251B";
     public bool IsGlobal { get; init; } = false;
+    public string LocationQuery { get; init; } = string.Empty;
     public List<string> ExtraRssFeeds { get; init; } = [];
     public List<string> KeyCompetitors { get; init; } = new();
     public List<string> DemandDrivers { get; init; } = new();
