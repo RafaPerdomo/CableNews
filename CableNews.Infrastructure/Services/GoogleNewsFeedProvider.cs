@@ -60,12 +60,23 @@ public class GoogleNewsFeedProvider : INewsFeedProvider
                 queries.Add($"{brandTerm}{locationSuffix} when:{days}d");
         }
 
+        var allBrands = new[]
+        {
+            "Nexans", "\"Centelsa by Nexans\"", "Centelsa",
+            "\"INDECO by Nexans\"", "\"Madeco by Nexans\"", "Madeco",
+            "\"Ficap by Nexans\"", "Ficap", "\"Nexans Brasil\"",
+            "\"Nexans Colombia\"", "\"Nexans Peru\"", "\"Nexans Chile\""
+        };
+        var crossBrandQuery = string.Join(" OR ", allBrands);
+        queries.Add($"({crossBrandQuery}) when:{days}d");
+
         var allArticles = new List<Article>();
 
         foreach (var query in queries)
         {
+            var lang = countryConfig.Code == "BR" ? "pt" : agentConfig.DefaultLanguage;
             var encodedQuery = Uri.EscapeDataString(query);
-            var url = $"https://news.google.com/rss/search?q={encodedQuery}&hl={agentConfig.DefaultLanguage}-{countryConfig.Code}&gl={countryConfig.Code}&ceid={countryConfig.Code}:{agentConfig.DefaultLanguage}-{countryConfig.Code}";
+            var url = $"https://news.google.com/rss/search?q={encodedQuery}&hl={lang}&gl={countryConfig.Code}";
 
             _logger.LogInformation("Fetching RSS group for {Country}. URL length: {Length}", countryConfig.Name, url.Length);
 
@@ -182,8 +193,11 @@ public class GoogleNewsFeedProvider : INewsFeedProvider
         }
 
 
+        var brandKeywords = new[] { "Nexans", "Centelsa", "Indeco", "Madeco", "Ficap", "Incable" };
+
         var orderedArticles = allArticles
-            .OrderByDescending(a => a.PublishedAt)
+            .OrderByDescending(a => brandKeywords.Any(b => a.Title.Contains(b, StringComparison.OrdinalIgnoreCase)))
+            .ThenByDescending(a => a.PublishedAt)
             .Take(agentConfig.MaxArticlesPerCountry)
             .ToList();
 

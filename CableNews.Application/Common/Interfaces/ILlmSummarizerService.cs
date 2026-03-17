@@ -1,8 +1,14 @@
-﻿namespace CableNews.Application.Common.Interfaces;
+namespace CableNews.Application.Common.Interfaces;
 
 using CableNews.Domain.Entities;
+using CableNews.Application.Common.Models;
 
 public interface ILlmSummarizerService
 {
-    Task<string> SummarizeArticlesAsync(List<Article> articles, CountryConfig country, CancellationToken cancellationToken);
+    Task<string> SummarizeArticlesAsync(
+        List<Article> articles, 
+        PrMetricsReport metrics,
+        List<CableNews.Domain.Entities.TenderResult> tenders,
+        CountryConfig countryConfig, 
+        CancellationToken cancellationToken);
 }

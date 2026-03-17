@@ -1,10 +1,11 @@
-﻿namespace CableNews.Infrastructure;
+namespace CableNews.Infrastructure;
 
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using CableNews.Application.Common.Interfaces;
 using CableNews.Infrastructure.Configuration;
 using CableNews.Infrastructure.Services;
+using CableNews.Infrastructure.Services.Tenders;
 
 public static class DependencyInjection
 {
@@ -24,6 +25,13 @@ public static class DependencyInjection
             client.Timeout = TimeSpan.FromMinutes(5);
         });
         
+        services.AddHttpClient<ILlmClassifierService, GeminiClassifierService>(client =>
+        {
+            client.Timeout = TimeSpan.FromMinutes(5);
+        });
+        services.AddHttpClient<ITenderProvider, SecopTenderProvider>();
+
+        services.AddTransient<IPrMetricsService, PrMetricsService>();
         services.AddTransient<IEmailService, GmailSmtpEmailService>();
 
         return services;

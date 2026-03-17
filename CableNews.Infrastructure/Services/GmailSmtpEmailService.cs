@@ -1,4 +1,4 @@
-﻿namespace CableNews.Infrastructure.Services;
+namespace CableNews.Infrastructure.Services;
 
 using Ardalis.GuardClauses;
 using MailKit.Net.Smtp;
@@ -44,8 +44,12 @@ public class GmailSmtpEmailService : IEmailService
         var brandLabel = string.IsNullOrWhiteSpace(localBrand) || localBrand == countryName ? "Nexans" : localBrand;
         var color = string.IsNullOrWhiteSpace(brandColor) ? "#E1251B" : brandColor;
 
-        bodyContent = bodyContent.Replace("<h2>", $"<div style=\"background-color:#1a1a2e; border-top:4px solid {color}; padding:12px 15px; margin:30px 0 15px 0;\"><h2 style=\"margin:0; font-size:14px; font-weight:bold; text-transform:uppercase; letter-spacing:1px; color:#ffffff; line-height:1.2;\">");
-        bodyContent = bodyContent.Replace("</h2>", "</h2></div>");
+        bodyContent = System.Text.RegularExpressions.Regex.Replace(
+            bodyContent, 
+            @"<h2[^>]*>(.*?)</h2>", 
+            $"<div style=\"background-color:#1a1a2e; border-top:4px solid {color}; padding:12px 15px; margin:30px 0 15px 0;\"><h2 style=\"margin:0; font-size:14px; font-weight:bold; text-transform:uppercase; letter-spacing:1px; color:#ffffff; line-height:1.2;\">$1</h2></div>",
+            System.Text.RegularExpressions.RegexOptions.Singleline | System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
         bodyContent = bodyContent.Replace("<ul>", "<ul style=\"margin:0 0 20px 0; padding:0 0 0 20px;\">");
         bodyContent = bodyContent.Replace("<li>", "<li style=\"margin-bottom:12px; font-size:14px; line-height:1.6; color:#1a1a2e;\">");
         bodyContent = bodyContent.Replace("<p>", "<p style=\"font-size:14px; line-height:1.6; margin:0 0 15px 0; color:#1a1a2e;\">");

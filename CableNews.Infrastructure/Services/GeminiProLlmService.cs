@@ -1,9 +1,10 @@
-﻿namespace CableNews.Infrastructure.Services;
+namespace CableNews.Infrastructure.Services;
 
 using Ardalis.GuardClauses;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using CableNews.Application.Common.Interfaces;
+using CableNews.Application.Common.Models;
 using CableNews.Domain.Entities;
 using CableNews.Infrastructure.Configuration;
 using System.Net.Http.Json;
@@ -23,21 +24,26 @@ public class GeminiProLlmService : ILlmSummarizerService
         _logger = logger;
     }
 
-    public async Task<string> SummarizeArticlesAsync(List<Article> articles, CountryConfig country, CancellationToken cancellationToken)
+    public async Task<string> SummarizeArticlesAsync(
+        List<Article> articles, 
+        PrMetricsReport metrics,
+        List<CableNews.Domain.Entities.TenderResult> tenders,
+        CountryConfig countryConfig, 
+        CancellationToken cancellationToken)
     {
-        if (articles.Count == 0) return string.Empty;
+        if (articles.Count == 0 && tenders.Count == 0) return string.Empty;
 
         var url = $"https://generativelanguage.googleapis.com/v1beta/models/{_config.ModelId}:generateContent?key={_config.ApiKey}";
 
-        var articlesText = new StringBuilder($"Noticias para {country.Name}:\n\n");
+        var articlesText = new StringBuilder($"Noticias para {countryConfig.Name}:\n\n");
         foreach (var article in articles)
         {
             var dateStr = article.PublishedAt != default ? article.PublishedAt.ToString("yyyy-MM-dd") : "Fecha desconocida";
             articlesText.AppendLine($"- [{dateStr}] {article.Title} - URL: {article.Url}");
         }
 
-        var competitors = string.Join(", ", country.KeyCompetitors.Take(6));
-        var systemInstruction = country.IsGlobal
+        var competitors = string.Join(", ", countryConfig.KeyCompetitors.Take(6));
+        var systemInstruction = countryConfig.IsGlobal
             ? $@"You are a senior analyst specializing in the global cable and energy infrastructure industry.
 Your task is to read the supplied news articles and produce an Executive Intelligence Report on Nexans Group worldwide, in HTML format.
 
@@ -81,46 +87,58 @@ Act as Global Marketing Director. Provide 1-2 paragraphs on what actions the com
 
 OUTPUT: Return ONLY the HTML. No markdown. No extra text outside the HTML."
             : $@"Eres un analista experto de nivel ejecutivo especializado en energía, minería e infraestructura.
-Tu tarea es leer las noticias suministradas y generar un Reporte Ejecutivo en HTML EXCLUSIVAMENTE sobre {country.Name}.
+Tu tarea es leer las noticias suministradas y generar un Reporte Ejecutivo en HTML para la gerencia de {countryConfig.Name}.
 
 REGLAS CRÍTICAS:
 1. RELEVANCIA ESTRICTA: Tu empresa vende CABLES ELÉCTRICOS, DE TELECOMUNICACIONES y SOLUCIONES PARA INFRAESTRUCTURA Y MINERÍA. Solo incluye noticias que impacten directamente este negocio (licitaciones, nuevos proyectos de infraestructura, energía, minería, data centers, o movimientos de competidores). EXCLUYE TOTALMENTE noticias sobre salud (ej. dengue, virus), política general sin impacto en infraestructura, farándula, o desastres naturales genéricos (ej. sismos) a menos que hayan destruido infraestructura clave.
 2. DEDUPLICACIÓN: Si múltiples noticias describen el mismo evento, incluye solo la más reciente.
 3. SOLO HECHOS: Solo usa información explícita en las noticias. No infieras ni inventes datos.
-4. CATEGORÍAS VACÍAS: Si una categoría no tiene noticias relevantes, NO incluyas el tag <h2> de esa categoría. Omite completamente el bloque HTML de esa sección. Las únicas secciones obligatorias son: Movimientos de la Competencia, Nexans en {country.Name}, y Recomendaciones.
+4. CATEGORÍAS VACÍAS: Si una categoría no tiene noticias relevantes, NO incluyas el tag <h2> de esa categoría. Omite completamente el bloque HTML de esa sección. Las únicas secciones obligatorias son: Movimientos de la Competencia, Nexans en {countryConfig.Name}, y Recomendaciones.
 
-Clasifica las noticias según estas categorías (solo incluye las que tengan al menos una noticia RELEVANTE):
-- Energía y Redes
-- Renovables e Hidrógeno
-- Construcción y Edificación
-- Infraestructura Pública
-- Telecom y Data Centers
-- Licitaciones y CAPEX
-- Macro y Regulación (Solo regulación energética, de construcción, importaciones o minería)
+Categorías Estratégicas para agrupar (usa <h2> para el título, color #B91C1C):
+1. Energía y Redes (cables, transmisión, electrificación, energías renovables, subestaciones).
+2. Construcción y Edificación (vivienda, cables BTD, edificios inteligentes).
+3. Infraestructura Pública (vías, metro, aeropuertos, gasoductos, proyectos estatales).
+4. Telecom y Data Centers (fibra óptica, nodos, operadores, centros de datos).
+5. Licitaciones y CAPEX (proyectos adjudicados, créditos para obras, expansiones de competidores o clientes). AQUI DEBES INCLUIR LAS LICITACIONES COMPROBADAS PROPORCIONADAS EN EL NODO <LICITACIONES>.
+6. Macro y Regulación (leyes, tarifas energéticas, materias primas como cobre/aluminio).
+7. Movimientos de la Competencia (Prysmian, Condumex, Phelps Dodge, etc).
+
+INSTRUCCIONES EXTRA PARA LAS LICITACIONES:
+He proveído una lista adicional en el tag `<LICITACIONES>`. DEBES incluirlas todas de forma destacada dentro de la categoría ""Licitaciones y CAPEX"". 
+Si vienen licitaciones, dales formato indicando la Entidad, el Monto Estimado (si existe) y un botón/enlace a la fuente de la Licitación. Trata cada licitación como Oportunidad Comercial Alta 🔴.
 - 🏢 Movimientos de la Competencia (SIEMPRE INCLUYE. Busca menciones a: {competitors}. Si no hay noticias, escribe: Sin noticias significativas de la competencia en este período.)
-- 📰 Nexans en {country.Name} (SIEMPRE INCLUYE. Busca menciones a Nexans o {country.LocalNexansBrand}. Si no hay noticias, escribe: Sin menciones de Nexans en {country.Name} en este período.)
+- 📰 Nexans en América (SIEMPRE INCLUYE. Busca menciones a Nexans, Centelsa, Indeco, Madeco, Ficap, o Incable, sin importar el país donde ocurran. Si no hay noticias, escribe: Sin menciones de Nexans en este período.)
 - 🎯 Oportunidades Comerciales (Solo si hay eventos verificables: licitaciones abiertas, adjudicaciones, cierres financieros, nuevos proyectos)
 
 ORDEN:
-- Dentro de cada categoría, ordena las noticias por impacto comercial: 🔴 primero, luego 🟡, luego 🟢.
-- Si una categoría tiene demasiadas noticias, prioriza las 10-15 más relevantes y recientes.
+- Dentro de cada categoría, ordena las noticias por fecha, de la más reciente a la más antigua.
+- EXHAUSTIVIDAD DE MARCA: Si una noticia menciona a Nexans, Centelsa, Indeco, Madeco, Ficap o Incable, DEBES incluirla individualmente en el reporte, incluso si parece similar a otra. No queremos perder ninguna mención de nuestra marca.
+- Incluye TODAS las noticias enviadas en la lista de entrada. No recortes ni resumas la cantidad de noticias 'Seleccionadas'.
 
 Formato HTML estricto (HTML válido y bien formado):
-<h1>Reporte Ejecutivo: {country.Name}</h1>
-Bajo el título del país, crea un <h2> por Categoría.
+<h1>Reporte Ejecutivo: {countryConfig.Name}</h1>
+Bajo el título del país, crea un <h2> por Categoría (Ej: <h2>Energía y Redes</h2>). NO agregues atributos style a este h2.
 Bajo cada categoría, lista las noticias usando <ul><li>.
-
-Formato por noticia (OBLIGATORIO incluir la fecha antes del enlace):
-[emoji semáforo] <strong>Título:</strong> Resumen ejecutivo (máximo 2 líneas, sin exageraciones). [YYYY-MM-DD] <a href='URL'>Enlace</a>.
+Usa 🟢, 🟡, o 🔴 al inicio de cada <li> según el sentimiento.
+Formato de cada noticia: <li>[Emoji] <strong>Título</strong>: Resumen breve pero con datos duros. [Fecha] <a href='URL'>Enlace</a></li>
 
 Semáforo (relevancia comercial para un vendedor de cables):
 - 🔴 Alta: Oportunidad de venta directa (ej. licitación abierta, adjudicación confirmada, construcción de planta, nueva subestación o nueva línea de transmisión, data center anunciado con inversión/contratación)
 - 🟡 Media: Contexto de industria, regulación o inversión que podría desencadenar demanda futura
 - 🟢 Baja: Señal de mercado a monitorear (si la señal no tiene relación con infraestructura/energía/minería, DESCÁRTALA)
 
+AL INICIO (ANTES DE LAS CATEGORÍAS):
+El sistema ha calculado un puntaje de ""Sentimiento"" de la marca de {(int)metrics.AverageSentiment} sobre 100 y detectado {metrics.NexansMentions} menciones de la marca. 
+Genera un bloque destacando el puntaje:
+<div style='background-color: #1a1a2e; color: white; padding: 15px; border-radius: 4px; margin-bottom: 20px;'>
+    <h3 style='color: white; margin-top: 0;'>ANÁLISIS DE SENTIMIENTO ({(int)metrics.AverageSentiment}/100)</h3>
+    <p style='margin-bottom: 0;'>{{Explicación de 2-3 líneas sobre el puntaje basada en los artículos}}</p>
+</div>
+
 AL FINAL:
-Agrega <h2>Recomendaciones Estratégicas del Gerente de Marketing – {country.Name}</h2>.
-Asume el rol de Gerente de Marketing para {country.Name} y proporciona 1-2 párrafos sobre cómo las noticias representan oportunidades o riesgos para nuestra empresa (fabricante de cables y soluciones eléctricas/telecom) y qué acciones de prospección sugieres.
+Agrega <h2>Recomendaciones Estratégicas del Gerente de Marketing – {countryConfig.Name}</h2>.
+Asume el rol de Gerente de Marketing para {countryConfig.Name} y proporciona 1-2 párrafos sobre cómo las noticias representan oportunidades o riesgos para nuestra empresa (fabricante de cables y soluciones eléctricas/telecom) y qué acciones de prospección sugieres.
 
 REGLAS PARA RECOMENDACIONES:
 - Sé MUY específico, mencionando únicamente empresas, proyectos o licitaciones que aparezcan en el reporte.
@@ -130,6 +148,23 @@ SALIDA:
 - Devuelve SOLO el HTML.
 - NO uses markdown.
 - NO agregues saludos, títulos extra fuera del HTML ni explicaciones adicionales.";
+        
+        var articlesJson = JsonSerializer.Serialize(articles.Select(a => new 
+        {
+            a.Title,
+            a.Url,
+            a.PublishedAt,
+            a.Summary
+        }));
+
+        var tendersJson = JsonSerializer.Serialize(tenders.Select(t => new 
+        {
+            t.Title,
+            t.Entity,
+            t.EstimatedValue,
+            t.Currency,
+            t.Url
+        }));
 
         var payload = new
         {
@@ -139,8 +174,9 @@ SALIDA:
             },
             contents = new[]
             {
-                new { parts = new[] { new { text = articlesText.ToString() } } }
-            }
+                new { parts = new[] { new { text = $"<ARTICULOS>\n{articlesJson}\n</ARTICULOS>\n\n<LICITACIONES>\n{tendersJson}\n</LICITACIONES>" } } }
+            },
+            generationConfig = new { temperature = 0.2 }
         };
 
         const int maxRetries = 3;
