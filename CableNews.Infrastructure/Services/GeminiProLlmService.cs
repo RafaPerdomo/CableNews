@@ -108,13 +108,13 @@ INSTRUCCIONES EXTRA PARA LAS LICITACIONES:
 He proveído una lista adicional en el tag `<LICITACIONES>`. DEBES incluirlas todas de forma destacada dentro de la categoría ""Licitaciones y CAPEX"". 
 Si vienen licitaciones, dales formato indicando la Entidad, el Monto Estimado (si existe) y un botón/enlace a la fuente de la Licitación. Trata cada licitación como Oportunidad Comercial Alta 🔴.
 - 🏢 Movimientos de la Competencia (SIEMPRE INCLUYE. Busca menciones a: {competitors}. Si no hay noticias, escribe: Sin noticias significativas de la competencia en este período.)
-- 📰 Nexans en América (SIEMPRE INCLUYE. Busca menciones a Nexans, Centelsa, Indeco, Madeco, Ficap, o Incable, sin importar el país donde ocurran. Si no hay noticias, escribe: Sin menciones de Nexans en este período.)
 - 🎯 Oportunidades Comerciales (Solo si hay eventos verificables: licitaciones abiertas, adjudicaciones, cierres financieros, nuevos proyectos)
 
 ORDEN:
 - Dentro de cada categoría, ordena las noticias por fecha, de la más reciente a la más antigua.
-- EXHAUSTIVIDAD DE MARCA: Si una noticia menciona a Nexans, Centelsa, Indeco, Madeco, Ficap o Incable, DEBES incluirla individualmente en el reporte, incluso si parece similar a otra. No queremos perder ninguna mención de nuestra marca.
-- Incluye TODAS las noticias enviadas en la lista de entrada. No recortes ni resumas la cantidad de noticias 'Seleccionadas'.
+- FOCO LOCAL ESTRICTO: Prioriza y analiza el impacto de estas noticias específicamente para el mercado y la industria de {countryConfig.Name}.
+- INCLUSION TOTAL: Las noticias enviadas ya fueron rigurosamente pre-filtradas. DEBES INCLUIR EXACTAMENTE EL 100% de las noticias en el reporte, sin omitir ni recortar ninguna, garantizando que el listado coincida con los KPI calculados previamente.
+- EXHAUSTIVIDAD DE MARCA: Asegúrate de destacar claramente las menciones a Nexans, Centelsa, Indeco, Madeco, Ficap o Incable. NO omitas ninguna noticia que mencione a la marca.
 
 Formato HTML estricto (HTML válido y bien formado):
 <h1>Reporte Ejecutivo: {countryConfig.Name}</h1>

@@ -55,12 +55,7 @@ public static class EmailKpiCardRenderer
                 <span style="color:#e74c3c;">■</span> <strong>{{topComp}}</strong> &nbsp;&nbsp;
                 <span style="color:#e0e0e0;">■</span> Industria
               </p>
-              {{(metrics.CrisisDetected ? $$"""
-            <div style='background-color: #FEF2F2; border: 2px solid #DC2626; color: #991B1B; padding: 15px; border-radius: 8px; margin-bottom: 20px;'>
-                <strong style='display: block; font-size: 16px;'>🚨 ALERTA DE CRISIS DETECTADA</strong>
-                <p style='margin: 5px 0 0 0; font-size: 14px;'>Se ha detectado un volumen inusual de noticias negativas o críticas para la marca ({{metrics.NexansMentions}} menciones, {{metrics.CompetitorMentions.Values.Sum()}} de competencia). Por favor, revise las noticias marcadas en <span style='color: #B91C1C; font-weight: bold;'>rojo</span> en el resumen técnico.</p>
-            </div>
-            """ : "")}}
+
             </td>
           </tr>
         </table>
@@ -82,7 +77,7 @@ public static class EmailKpiCardRenderer
                 <li style="margin-bottom:5px;"><strong>Sentimiento (0-100):</strong> Salud de la marca. >70 Positivo, 40-69 Neutral, <40 Negativo.</li>
                 <li style="margin-bottom:5px;"><strong>Menciones Competidores:</strong> Número de veces que los competidores fueron mencionados en las noticias.</li>
                 <li style="margin-bottom:5px;"><strong>Top Competidor:</strong> El competidor con el mayor número de menciones en el periodo.</li>
-                <li style="margin-bottom:5px;"><strong>Crisis Detectada:</strong> Alerta generada cuando se detecta un volumen inusual de noticias negativas o críticas para la marca.</li>
+
               </ul>
             </td>
           </tr>

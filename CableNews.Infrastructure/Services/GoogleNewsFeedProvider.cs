@@ -29,7 +29,7 @@ public class GoogleNewsFeedProvider : INewsFeedProvider
         }
         var queries = new List<string>();
 
-        void AddQueryGroup(IEnumerable<string> terms)
+        void AddQueryGroup(IEnumerable<string> terms, int maxDays)
         {
             var validTerms = terms.Where(t => !string.IsNullOrWhiteSpace(t)).ToList();
             if (validTerms.Count == 0) return;
@@ -39,25 +39,47 @@ public class GoogleNewsFeedProvider : INewsFeedProvider
             foreach (var chunk in validTerms.Chunk(8))
             {
                 var joined = string.Join(" OR ", chunk);
-                queries.Add($"({joined}){locationSuffix} when:{days}d");
+                queries.Add($"({joined}){locationSuffix} when:{maxDays}d");
             }
         }
 
-        AddQueryGroup(countryConfig.DemandDrivers);
-        AddQueryGroup(countryConfig.Institutions);
-        AddQueryGroup(countryConfig.Operators);
-        AddQueryGroup(countryConfig.MacroSignals);
-        AddQueryGroup(countryConfig.ExtraEntities);
-        AddQueryGroup(countryConfig.SalesIntelligence);
-        AddQueryGroup(countryConfig.KeyCompetitors);
+        // 1. Current Week (7d focus)
+        AddQueryGroup(countryConfig.DemandDrivers, 7);
+        AddQueryGroup(countryConfig.Institutions, 7);
+        AddQueryGroup(countryConfig.Operators, 7);
+        AddQueryGroup(countryConfig.MacroSignals, 7);
+        AddQueryGroup(countryConfig.ExtraEntities, 7);
+        AddQueryGroup(countryConfig.SalesIntelligence, 7);
 
+        // 2. Current Month (30d fallback)
+        AddQueryGroup(countryConfig.DemandDrivers, days);
+        AddQueryGroup(countryConfig.Institutions, days);
+        AddQueryGroup(countryConfig.Operators, days);
+        AddQueryGroup(countryConfig.MacroSignals, days);
+        AddQueryGroup(countryConfig.ExtraEntities, days);
+        AddQueryGroup(countryConfig.SalesIntelligence, days);
+
+        // 3. Competitors (Individual searches: 1 week then 1 month)
+        foreach (var comp in countryConfig.KeyCompetitors.Where(c => !string.IsNullOrWhiteSpace(c)))
+        {
+            queries.Add($"\"{comp}\"{locationSuffix} when:7d");
+            queries.Add($"\"{comp}\"{locationSuffix} when:{days}d");
+        }
+
+        // 4. Brands (1 week then 1 month)
         if (!string.IsNullOrWhiteSpace(countryConfig.LocalNexansBrand))
         {
             var brandTerm = $"(Nexans OR \"{countryConfig.LocalNexansBrand}\")";
             if (countryConfig.IsGlobal)
+            {
+                queries.Add($"{brandTerm} when:7d");
                 queries.Add($"{brandTerm} when:{days}d");
+            }
             else
+            {
+                queries.Add($"{brandTerm}{locationSuffix} when:7d");
                 queries.Add($"{brandTerm}{locationSuffix} when:{days}d");
+            }
         }
 
         var allBrands = new[]
@@ -68,6 +90,7 @@ public class GoogleNewsFeedProvider : INewsFeedProvider
             "\"Nexans Colombia\"", "\"Nexans Peru\"", "\"Nexans Chile\""
         };
         var crossBrandQuery = string.Join(" OR ", allBrands);
+        queries.Add($"({crossBrandQuery}) when:7d");
         queries.Add($"({crossBrandQuery}) when:{days}d");
 
         var allArticles = new List<Article>();
