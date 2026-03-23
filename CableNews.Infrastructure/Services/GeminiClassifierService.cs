@@ -56,7 +56,7 @@ public class GeminiClassifierService : ILlmClassifierService
         - "mentionedBrands": array of Nexans brands mentioned ({{string.Join(", ", nexansBrands)}})
         - "mentionedCompetitors": array of competitors mentioned (like {{competitorsList}})
         - "isCrisisIndicator": true if negative news directly about Nexans or its subsidiaries
-        - "isRelevant": true ONLY if the article explicitly mentions our brands OR is a highly significant local industry event occurring strictly IN {{country.Name}}. News from other countries are strictly irrelevant. Keep only the most impactful news to reduce noise.
+        - "isRelevant": true ONLY if the article explicitly mentions our brands ({{string.Join(", ", nexansBrands)}}), mentions our key competitors (like {{competitorsList}}), OR is a highly significant local industry event occurring strictly IN {{country.Name}}. News from other countries without brands or competitors are strictly irrelevant.
 
         Return ONLY the JSON array. No markdown, no HTML, no explanation. Just the raw array `[{...}]`.
         """;
