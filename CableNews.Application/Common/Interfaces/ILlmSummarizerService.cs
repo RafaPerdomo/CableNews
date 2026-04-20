@@ -8,7 +8,7 @@ public interface ILlmSummarizerService
     Task<string> SummarizeArticlesAsync(
         List<Article> articles, 
         PrMetricsReport metrics,
-        List<CableNews.Domain.Entities.TenderResult> tenders,
+        List<TenderResult> tenders,
         CountryConfig countryConfig, 
         CancellationToken cancellationToken);
 }

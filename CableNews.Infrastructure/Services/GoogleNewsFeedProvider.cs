@@ -22,28 +22,23 @@ public class GoogleNewsFeedProvider : INewsFeedProvider
     public async Task<List<Article>> FetchNewsAsync(CountryConfig countryConfig, NewsAgentConfig agentConfig, CancellationToken cancellationToken)
     {
         var days = Math.Max(1, agentConfig.LookbackHours / 24);
-        var locationSuffix = countryConfig.IsGlobal ? string.Empty : $" location:{countryConfig.Name}";
-        if (!string.IsNullOrWhiteSpace(countryConfig.LocationQuery))
-        {
-            locationSuffix = $" {countryConfig.LocationQuery}";
-        }
+        var locationSuffix = BuildLocationSuffix(countryConfig);
         var queries = new List<string>();
 
-        void AddQueryGroup(IEnumerable<string> terms, int maxDays)
+        void AddQueryGroup(IEnumerable<string> terms, int maxDays, string? locationOverride = null)
         {
             var validTerms = terms.Where(t => !string.IsNullOrWhiteSpace(t)).ToList();
             if (validTerms.Count == 0) return;
 
-            // Batch into chunks of 8: long single-query strings get truncated by Google,
-            // smaller batches return more distinct results.
+            var loc = locationOverride ?? locationSuffix;
+
             foreach (var chunk in validTerms.Chunk(8))
             {
                 var joined = string.Join(" OR ", chunk);
-                queries.Add($"({joined}){locationSuffix} when:{maxDays}d");
+                queries.Add($"({joined}){loc} when:{maxDays}d");
             }
         }
 
-        // 1. Current Week (7d focus)
         AddQueryGroup(countryConfig.DemandDrivers, 7);
         AddQueryGroup(countryConfig.Institutions, 7);
         AddQueryGroup(countryConfig.Operators, 7);
@@ -51,7 +46,6 @@ public class GoogleNewsFeedProvider : INewsFeedProvider
         AddQueryGroup(countryConfig.ExtraEntities, 7);
         AddQueryGroup(countryConfig.SalesIntelligence, 7);
 
-        // 2. Current Month (30d fallback)
         AddQueryGroup(countryConfig.DemandDrivers, days);
         AddQueryGroup(countryConfig.Institutions, days);
         AddQueryGroup(countryConfig.Operators, days);
@@ -59,41 +53,15 @@ public class GoogleNewsFeedProvider : INewsFeedProvider
         AddQueryGroup(countryConfig.ExtraEntities, days);
         AddQueryGroup(countryConfig.SalesIntelligence, days);
 
-        // 3. Competitors (Individual searches: 1 week then 1 month)
-        foreach (var comp in countryConfig.KeyCompetitors.Where(c => !string.IsNullOrWhiteSpace(c)))
+        if (IsAmericasOrGlobal(countryConfig))
         {
-            queries.Add($"\"{comp}\"{locationSuffix} when:7d");
-            queries.Add($"\"{comp}\"{locationSuffix} when:{days}d");
+            AddCompetitorQueries(countryConfig, queries, days);
+            AddGlobalIndustryQueries(countryConfig, queries);
         }
 
-        // 4. Brands (1 week then 1 month)
-        if (!string.IsNullOrWhiteSpace(countryConfig.LocalNexansBrand))
-        {
-            var brandTerm = $"(Nexans OR \"{countryConfig.LocalNexansBrand}\")";
-            if (countryConfig.IsGlobal)
-            {
-                queries.Add($"{brandTerm} when:7d");
-                queries.Add($"{brandTerm} when:{days}d");
-            }
-            else
-            {
-                queries.Add($"{brandTerm}{locationSuffix} when:7d");
-                queries.Add($"{brandTerm}{locationSuffix} when:{days}d");
-            }
-        }
+        AddBrandQueries(countryConfig, queries, locationSuffix, days);
 
-        var allBrands = new[]
-        {
-            "Nexans", "\"Centelsa by Nexans\"", "Centelsa",
-            "\"INDECO by Nexans\"", "\"Madeco by Nexans\"", "Madeco",
-            "\"Ficap by Nexans\"", "Ficap", "\"Nexans Brasil\"",
-            "\"Nexans Colombia\"", "\"Nexans Peru\"", "\"Nexans Chile\""
-        };
-        var crossBrandQuery = string.Join(" OR ", allBrands);
-        queries.Add($"({crossBrandQuery}) when:7d");
-        queries.Add($"({crossBrandQuery}) when:{days}d");
-
-        var allArticles = new List<Article>();
+        var articleMap = new Dictionary<string, Article>(StringComparer.Ordinal);
 
         foreach (var query in queries)
         {
@@ -101,140 +69,67 @@ public class GoogleNewsFeedProvider : INewsFeedProvider
             var encodedQuery = Uri.EscapeDataString(query);
             var url = $"https://news.google.com/rss/search?q={encodedQuery}&hl={lang}&gl={countryConfig.Code}";
 
-            _logger.LogInformation("Fetching RSS group for {Country}. URL length: {Length}", countryConfig.Name, url.Length);
+            if (url.Length > 2048)
+            {
+                _logger.LogWarning("Skipping query for {Country}: URL length {Length} exceeds limit", countryConfig.Name, url.Length);
+                continue;
+            }
+
+            _logger.LogInformation("Fetching RSS for {Country}. URL length: {Length}", countryConfig.Name, url.Length);
 
             try
             {
                 var response = await _httpClient.GetStringAsync(url, cancellationToken);
                 var xdoc = XDocument.Parse(response);
-                
                 var items = xdoc.Descendants("item").Take(100).ToList();
-                int skippedTitle = 0;
+                int added = 0;
 
                 foreach (var item in items)
                 {
-                    var title = item.Element("title")?.Value ?? string.Empty;
-                    var googleLink = item.Element("link")?.Value ?? string.Empty;
-                    var description = item.Element("description")?.Value ?? string.Empty;
-                    var pubDateStr = item.Element("pubDate")?.Value;
-                    
-                    DateTime.TryParse(pubDateStr, out var pubDate);
+                    var article = ParseRssItem(item, countryConfig.Code);
+                    if (article is null) continue;
 
-                    if (pubDate != default)
+                    if (!articleMap.ContainsKey(article.Hash))
                     {
-                        var timeSpan = DateTime.UtcNow - pubDate.ToUniversalTime();
-                        if (timeSpan.TotalDays > 35 || timeSpan.TotalHours < -48)
-                            continue;
-                    }
-
-                    if (string.IsNullOrWhiteSpace(title) || string.IsNullOrWhiteSpace(googleLink)) 
-                    {
-                        skippedTitle++;
-                        continue;
-                    }
-
-                    var articleUrl = ExtractUrlFromDescription(description) ?? googleLink;
-
-                    var hash = ComputeSha256(title);
-
-                    if (!allArticles.Any(a => a.Hash == hash))
-                    {
-                        allArticles.Add(new Article
-                        {
-                            Hash = hash,
-                            Title = title,
-                            Url = articleUrl,
-                            PublishedAt = pubDate,
-                            CountryCode = countryConfig.Code,
-                            Summary = string.Empty
-                        });
+                        articleMap[article.Hash] = article;
+                        added++;
                     }
                 }
-                
-                _logger.LogInformation("Subgroup returned {Count} valid internal RSS items and skipped {TitleCount} errors.", 
-                   allArticles.Count, skippedTitle);
+
+                _logger.LogInformation("Query returned {Added} new articles (total: {Total})", added, articleMap.Count);
             }
             catch (Exception ex)
             {
-                _logger.LogWarning("Error fetching or parsing news subgroup for {Country} (Likely Rate limit). Msg: {Msg}", countryConfig.Name, ex.Message);
+                _logger.LogWarning("Error fetching RSS for {Country}: {Msg}", countryConfig.Name, ex.Message);
             }
 
             await Task.Delay(1500, cancellationToken);
         }
 
-        // Fetch static industry/procurement RSS feeds (no query building, direct URL)
-        foreach (var feedUrl in countryConfig.ExtraRssFeeds)
-        {
-            try
-            {
-                _logger.LogInformation("Fetching static RSS feed {Url} for {Country}", feedUrl, countryConfig.Name);
-                var response = await _httpClient.GetStringAsync(feedUrl, cancellationToken);
-                var xdoc = XDocument.Parse(response);
-                var items = xdoc.Descendants("item").Take(50).ToList();
-                int added = 0;
-
-                foreach (var item in items)
-                {
-                    var title = item.Element("title")?.Value ?? string.Empty;
-                    var link = item.Element("link")?.Value ?? string.Empty;
-                    var pubDateStr = item.Element("pubDate")?.Value;
-
-                    DateTime.TryParse(pubDateStr, out var pubDate);
-
-                    if (pubDate != default)
-                    {
-                        var timeSpan = DateTime.UtcNow - pubDate.ToUniversalTime();
-                        if (timeSpan.TotalDays > 35 || timeSpan.TotalHours < -48)
-                            continue;
-                    }
-
-                    if (string.IsNullOrWhiteSpace(title) || string.IsNullOrWhiteSpace(link)) continue;
-
-                    var hash = ComputeSha256(title);
-                    if (!allArticles.Any(a => a.Hash == hash))
-                    {
-                        allArticles.Add(new Article
-                        {
-                            Hash = hash,
-                            Title = title,
-                            Url = link,
-                            PublishedAt = pubDate,
-                            CountryCode = countryConfig.Code,
-                            Summary = string.Empty
-                        });
-                        added++;
-                    }
-                }
-
-                _logger.LogInformation("Static feed {Url} added {Count} articles for {Country}", feedUrl, added, countryConfig.Name);
-                await Task.Delay(500, cancellationToken);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning("Failed to fetch static RSS {Url}: {Msg}", feedUrl, ex.Message);
-            }
-        }
-
+        await FetchStaticRssFeeds(countryConfig, articleMap, cancellationToken);
 
         var brandKeywords = new[] { "Nexans", "Centelsa", "Indeco", "Madeco", "Ficap", "Incable" };
 
-        var orderedArticles = allArticles
+        return articleMap.Values
             .OrderByDescending(a => brandKeywords.Any(b => a.Title.Contains(b, StringComparison.OrdinalIgnoreCase)))
             .ThenByDescending(a => a.PublishedAt)
             .Take(agentConfig.MaxArticlesPerCountry)
             .ToList();
+    }
 
-        _logger.LogInformation("Resolving {Count} Google redirect URLs for {Country}...", orderedArticles.Count, countryConfig.Name);
+    public async Task<List<Article>> ResolveUrlsAsync(List<Article> articles, CancellationToken cancellationToken)
+    {
+        _logger.LogInformation("Resolving {Count} Google redirect URLs...", articles.Count);
 
-        var resolvedArticles = new Article[orderedArticles.Count];
+        var resolved = new Article[articles.Count];
         var semaphore = new SemaphoreSlim(5);
-        var tasks = orderedArticles.Select(async (article, index) =>
+        var tasks = articles.Select(async (article, index) =>
         {
             await semaphore.WaitAsync(cancellationToken);
             try
             {
                 var realUrl = await ResolveGoogleRedirectAsync(article.Url, cancellationToken);
-                resolvedArticles[index] = new Article
+                resolved[index] = new Article
                 {
                     Hash = article.Hash,
                     Title = article.Title,
@@ -251,8 +146,156 @@ public class GoogleNewsFeedProvider : INewsFeedProvider
         });
 
         await Task.WhenAll(tasks);
+        return resolved.ToList();
+    }
 
-        return resolvedArticles.ToList();
+    private static bool IsAmericasOrGlobal(CountryConfig config) =>
+        config.IsGlobal || config.Code is "AMERICAS";
+
+    private static string BuildLocationSuffix(CountryConfig config)
+    {
+        if (!string.IsNullOrWhiteSpace(config.LocationQuery))
+            return $" {config.LocationQuery}";
+
+        return config.IsGlobal ? string.Empty : $" location:{config.Name}";
+    }
+
+    private static void AddCompetitorQueries(CountryConfig config, List<string> queries, int days)
+    {
+        var searchTerms = config.CompetitorSearchTerms.Count > 0
+            ? config.CompetitorSearchTerms
+            : config.KeyCompetitors;
+
+        var validTerms = searchTerms.Where(t => !string.IsNullOrWhiteSpace(t)).ToList();
+        if (validTerms.Count == 0) return;
+
+        foreach (var chunk in validTerms.Chunk(4))
+        {
+            var joined = string.Join(" OR ", chunk.Select(c => c.Contains(' ') ? $"\"{c}\"" : c));
+            queries.Add($"({joined}) when:7d");
+            queries.Add($"({joined}) when:{days}d");
+        }
+
+        var actionTerms = new[] { "contract", "awarded", "tender", "investment", "acquisition", "factory", "plant" };
+        foreach (var comp in config.KeyCompetitors.Take(6).Where(c => !string.IsNullOrWhiteSpace(c)))
+        {
+            var shortName = comp.Split('(')[0].Trim().Split(' ')[0];
+            var actions = string.Join(" OR ", actionTerms);
+            queries.Add($"({shortName}) AND ({actions}) when:7d");
+        }
+    }
+
+    private static void AddGlobalIndustryQueries(CountryConfig config, List<string> queries)
+    {
+        var industryTerms = new[]
+        {
+            "\"cable industry\" OR \"wire and cable\" OR \"power cable\" OR \"cable manufacturer\"",
+            "\"submarine cable\" OR \"HVDC cable\" OR \"offshore wind cable\" OR \"subsea cable\"",
+            "\"high voltage cable\" OR \"medium voltage cable\" OR \"fiber optic cable deployment\"",
+            "\"energy transition\" OR \"grid modernization\" OR \"grid expansion\" investment",
+            "\"data center\" AND (cable OR infrastructure OR construction)",
+            "\"copper price\" OR \"aluminium price\" OR \"LME copper\" OR \"copper futures\""
+        };
+
+        foreach (var term in industryTerms)
+        {
+            queries.Add($"({term}) when:7d");
+        }
+    }
+
+    private static void AddBrandQueries(CountryConfig config, List<string> queries, string locationSuffix, int days)
+    {
+        if (string.IsNullOrWhiteSpace(config.LocalNexansBrand)) return;
+
+        var brandTerm = $"(Nexans OR \"{config.LocalNexansBrand}\")";
+        if (IsAmericasOrGlobal(config))
+        {
+            queries.Add($"{brandTerm} when:7d");
+            queries.Add($"{brandTerm} when:{days}d");
+        }
+        else
+        {
+            queries.Add($"{brandTerm}{locationSuffix} when:7d");
+            queries.Add($"{brandTerm}{locationSuffix} when:{days}d");
+        }
+
+        var allBrands = new[]
+        {
+            "Nexans", "\"Centelsa by Nexans\"", "Centelsa",
+            "\"INDECO by Nexans\"", "\"Madeco by Nexans\"", "Madeco",
+            "\"Ficap by Nexans\"", "Ficap", "\"Nexans Brasil\"",
+            "\"Nexans Colombia\"", "\"Nexans Peru\"", "\"Nexans Chile\""
+        };
+        var crossBrandQuery = string.Join(" OR ", allBrands);
+        queries.Add($"({crossBrandQuery}) when:7d");
+        queries.Add($"({crossBrandQuery}) when:{days}d");
+    }
+
+    private async Task FetchStaticRssFeeds(CountryConfig config, Dictionary<string, Article> articleMap, CancellationToken cancellationToken)
+    {
+        foreach (var feedUrl in config.ExtraRssFeeds)
+        {
+            try
+            {
+                _logger.LogInformation("Fetching static RSS feed {Url} for {Country}", feedUrl, config.Name);
+                var response = await _httpClient.GetStringAsync(feedUrl, cancellationToken);
+                var xdoc = XDocument.Parse(response);
+                var items = xdoc.Descendants("item").Take(50).ToList();
+                int added = 0;
+
+                foreach (var item in items)
+                {
+                    var article = ParseRssItem(item, config.Code);
+                    if (article is null) continue;
+
+                    if (!articleMap.ContainsKey(article.Hash))
+                    {
+                        articleMap[article.Hash] = article;
+                        added++;
+                    }
+                }
+
+                _logger.LogInformation("Static feed {Url} added {Count} articles for {Country}", feedUrl, added, config.Name);
+                await Task.Delay(500, cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning("Failed to fetch static RSS {Url}: {Msg}", feedUrl, ex.Message);
+            }
+        }
+    }
+
+    private static Article? ParseRssItem(XElement item, string countryCode)
+    {
+        var title = item.Element("title")?.Value ?? string.Empty;
+        var googleLink = item.Element("link")?.Value ?? string.Empty;
+        var description = item.Element("description")?.Value ?? string.Empty;
+        var pubDateStr = item.Element("pubDate")?.Value;
+
+        DateTime.TryParse(pubDateStr, out var pubDate);
+
+        if (pubDate != default)
+        {
+            var timeSpan = DateTime.UtcNow - pubDate.ToUniversalTime();
+            if (timeSpan.TotalDays > 35 || timeSpan.TotalHours < -48)
+                return null;
+        }
+
+        if (string.IsNullOrWhiteSpace(title) || string.IsNullOrWhiteSpace(googleLink))
+            return null;
+
+        var articleUrl = ExtractUrlFromDescription(description) ?? googleLink;
+        var hash = ComputeSha256(title);
+
+        return new Article
+        {
+            Hash = hash,
+            Title = title,
+            Url = articleUrl,
+            PublishedAt = pubDate,
+            CountryCode = countryCode,
+            Summary = string.Empty
+        };
     }
 
     private static bool IsGoogleRedirectUrl(string url) =>
@@ -274,7 +317,6 @@ public class GoogleNewsFeedProvider : INewsFeedProvider
             if (string.IsNullOrEmpty(base64Str))
                 return googleUrl;
 
-            // Step 1: Fetch signature using the articles/ URL (not rss/articles/)
             var articlePageUrl = $"https://news.google.com/articles/{base64Str}";
             string? signature = null;
             string? timestamp = null;
@@ -299,13 +341,11 @@ public class GoogleNewsFeedProvider : INewsFeedProvider
                 if (!string.IsNullOrEmpty(signature) && !string.IsNullOrEmpty(timestamp))
                     break;
 
-                // Fallback: try extracting URL directly from older redirect HTML
                 var extracted = ExtractUrlFromHtml(html);
                 if (extracted is not null)
                     return extracted;
             }
 
-            // Step 2: Call batchexecute RPC if we have credentials
             if (!string.IsNullOrEmpty(signature) && !string.IsNullOrEmpty(timestamp))
             {
                 var payloadInner = $"[\"garturlreq\",[[\"X\",\"X\",[\"X\",\"X\"],null,null,1,1,\"US:en\",null,1,null,null,null,null,null,0,1],\"X\",\"X\",1,[1,1,1],1,1,null,0,0,null,0],\"{base64Str}\",{timestamp},\"{signature}\"]";
@@ -354,26 +394,23 @@ public class GoogleNewsFeedProvider : INewsFeedProvider
         if (end < 0) return null;
         return html[start..end];
     }
-    
+
     private static string? ParseBatchExecuteResponse(string responseText)
     {
         try
         {
-            // Skip leading garbage like ")]}'" and find the JSON
             var jsonStart = responseText.IndexOf("[[[");
             if (jsonStart < 0) jsonStart = responseText.IndexOf("[[");
             if (jsonStart < 0) return null;
-            
+
             var jsonStr = responseText[jsonStart..].Trim();
             using var doc = System.Text.Json.JsonDocument.Parse(jsonStr);
 
-            // Structure: [ ['wrb.fr', 'Fbv4je', '{inner_json}', ...], ['di',...], ... ]
             foreach (var element in doc.RootElement.EnumerateArray())
             {
                 if (element.ValueKind != System.Text.Json.JsonValueKind.Array) continue;
                 var items = element.EnumerateArray().ToList();
                 if (items.Count < 3) continue;
-                // item[0] should be 'wrb.fr', item[2] is the inner JSON string
                 var innerJsonStr = items[2].ValueKind == System.Text.Json.JsonValueKind.String
                     ? items[2].GetString()
                     : null;
@@ -406,8 +443,8 @@ public class GoogleNewsFeedProvider : INewsFeedProvider
             var index = html.IndexOf(pattern, StringComparison.OrdinalIgnoreCase);
             if (index < 0) continue;
 
-            var urlStart = pattern.StartsWith("href=") 
-                ? index + "href=\"".Length 
+            var urlStart = pattern.StartsWith("href=")
+                ? index + "href=\"".Length
                 : index + pattern.Length;
 
             var urlEnd = html.IndexOf('"', urlStart);

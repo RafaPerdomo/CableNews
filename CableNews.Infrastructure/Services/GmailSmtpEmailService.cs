@@ -36,11 +36,14 @@ public class GmailSmtpEmailService : IEmailService
                 message.To.Add(new MailboxAddress("Subscriber", recipient));
         }
 
-        message.Subject = $"📰 CableNews Report – {countryName} – {DateTime.Now:yyyy-MM-dd}";
+        var tz = TimeZoneInfo.FindSystemTimeZoneById(OperatingSystem.IsWindows() ? "SA Pacific Standard Time" : "America/Bogota");
+        var localNow = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, tz);
+
+        message.Subject = $"📰 CableNews Report – {countryName} – {localNow:yyyy-MM-dd}";
 
         var bodyContent = System.Text.RegularExpressions.Regex.Replace(
             htmlContent, "<h1[^>]*>.*?</h1>", "", System.Text.RegularExpressions.RegexOptions.Singleline);
-        var dateStr = DateTime.Now.ToString("dddd, dd 'de' MMMM 'de' yyyy", new System.Globalization.CultureInfo("es-CO"));
+        var dateStr = localNow.ToString("dddd, dd 'de' MMMM 'de' yyyy", new System.Globalization.CultureInfo("es-CO"));
         var brandLabel = string.IsNullOrWhiteSpace(localBrand) || localBrand == countryName ? "Nexans" : localBrand;
         var color = string.IsNullOrWhiteSpace(brandColor) ? "#E1251B" : brandColor;
 

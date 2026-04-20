@@ -38,47 +38,52 @@ public class GenerateNewsletterCommandHandler : IRequestHandler<GenerateNewslett
         _logger.LogInformation("Generating newsletter for {Count} countries", request.Config.Countries.Count);
 
         var anySuccess = false;
+        var totalSw = System.Diagnostics.Stopwatch.StartNew();
 
         foreach (var country in request.Config.Countries)
         {
+            var countrySw = System.Diagnostics.Stopwatch.StartNew();
             _logger.LogInformation("--- Processing Newsletter for {CountryName} ({CountryCode}) ---", country.Name, country.Code);
-            
+
             var articles = await _newsProvider.FetchNewsAsync(country, request.Config, cancellationToken);
-            
+
             if (articles.Count == 0)
             {
                 _logger.LogWarning("No articles fetched for {CountryName}. Skipping.", country.Name);
                 continue;
             }
 
-            _logger.LogInformation("Classifying {Count} articles with Gemini 3.1 Pro (Agent 1)...", articles.Count);
+            _logger.LogInformation("Classifying {Count} articles for {CountryName} (Agent 1)...", articles.Count, country.Name);
             var analyses = await _classifier.ClassifyArticlesAsync(articles, country, cancellationToken);
-            
+
             _logger.LogInformation("Calculating PR Metrics for {CountryName} (Agent 2)...", country.Name);
             var metrics = await _metricsService.CalculateMetricsAsync(analyses, articles.Count, country, cancellationToken);
 
-            _logger.LogInformation("Summarizing relevant articles for {CountryName} using LLM (Agent 3)...", country.Name);
-            // We pass the subset of relevant articles based on the hashes returned by the classifier along with the metrics
             var relevantHashes = analyses.Select(a => a.ArticleHash).ToHashSet();
             var relevantArticles = articles.Where(a => relevantHashes.Contains(a.Hash)).ToList();
-            
-            _logger.LogInformation("Fetching Tenders via Open APIs for {CountryName}...", country.Name);
-            var tenders = new List<TenderResult>();
-            foreach (var provider in _tenderProviders)
+
+            _logger.LogInformation("Resolving URLs for {Count} relevant articles (of {Total} fetched) for {CountryName}...",
+                relevantArticles.Count, articles.Count, country.Name);
+            relevantArticles = await _newsProvider.ResolveUrlsAsync(relevantArticles, cancellationToken);
+
+            var tenderTasks = _tenderProviders.Select(async provider =>
             {
                 try
                 {
-                    // Fetch tenders from 30 days ago to guarantee data capture for the test
-                    var providerTenders = await provider.FetchTendersAsync(country, DateTimeOffset.UtcNow.AddDays(-30), cancellationToken);
-                    tenders.AddRange(providerTenders);
+                    return await provider.FetchTendersAsync(country, DateTimeOffset.UtcNow.AddDays(-30), cancellationToken);
                 }
                 catch (Exception ex)
                 {
                     _logger.LogWarning(ex, "Error fetching tenders from {ProviderName} for {CountryName}", provider.ProviderName, country.Name);
+                    return new List<TenderResult>();
                 }
-            }
+            });
+
+            var tenderResults = await Task.WhenAll(tenderTasks);
+            var tenders = tenderResults.SelectMany(t => t).ToList();
             _logger.LogInformation("Found {Count} active Tenders for {CountryName}.", tenders.Count, country.Name);
 
+            _logger.LogInformation("Summarizing {Count} relevant articles for {CountryName} (Agent 3)...", relevantArticles.Count, country.Name);
             var summaryHtml = await _summarizer.SummarizeArticlesAsync(relevantArticles, metrics, tenders, country, cancellationToken);
 
             if (string.IsNullOrEmpty(summaryHtml))
@@ -87,19 +92,22 @@ public class GenerateNewsletterCommandHandler : IRequestHandler<GenerateNewslett
                 continue;
             }
 
-            // Inject KPI Cards and Glossary
             var kpiHtml = CableNews.Application.Common.Utils.EmailKpiCardRenderer.RenderKpiBar(metrics, country.BrandColor ?? "#E1251B");
             var glossaryHtml = CableNews.Application.Common.Utils.EmailKpiCardRenderer.RenderGlossary();
-            
+
             var finalHtml = summaryHtml.Replace("</h1>", $"</h1>\n{kpiHtml}\n");
             finalHtml += glossaryHtml;
 
             _logger.LogInformation("Sending executive newsletter for {CountryName} via Email...", country.Name);
             await _emailService.SendNewsletterAsync(finalHtml, country.Name, country.LocalNexansBrand ?? country.Name, country.BrandColor ?? "#E1251B", cancellationToken);
-            
-            _logger.LogInformation("Newsletter for {CountryName} generated and sent successfully.", country.Name);
+
+            countrySw.Stop();
+            _logger.LogInformation("Newsletter for {CountryName} completed in {ElapsedMs}ms.", country.Name, countrySw.ElapsedMilliseconds);
             anySuccess = true;
         }
+
+        totalSw.Stop();
+        _logger.LogInformation("All newsletters completed in {ElapsedMs}ms.", totalSw.ElapsedMilliseconds);
 
         return anySuccess;
     }
