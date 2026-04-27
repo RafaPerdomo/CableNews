@@ -3,4 +3,5 @@
   <Project Path="CableNews.Domain/CableNews.Domain.csproj" />
   <Project Path="CableNews.Infrastructure/CableNews.Infrastructure.csproj" />
   <Project Path="CableNews.Worker/CableNews.Worker.csproj" />
+  <Project Path="CableNews.Application.UnitTests/CableNews.Application.UnitTests.csproj" />
 </Solution>
