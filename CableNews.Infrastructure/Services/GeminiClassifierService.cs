@@ -175,7 +175,6 @@ public class GeminiClassifierService : ILlmClassifierService
 
         return results;
     }
-    }
 
     private static string BuildGlobalClassifierPrompt(string[] categories, string[] brands, string competitors)
     {
