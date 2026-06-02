@@ -6,7 +6,7 @@ using CableNews.Application.Common.Models;
 public interface ILlmSummarizerService
 {
     Task<string> SummarizeArticlesAsync(
-        List<Article> articles, 
+        List<AnalyzedArticle> articles, 
         PrMetricsReport metrics,
         List<TenderResult> tenders,
         CountryConfig countryConfig, 

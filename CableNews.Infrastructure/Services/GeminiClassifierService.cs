@@ -4,6 +4,7 @@ using Ardalis.GuardClauses;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using CableNews.Application.Common.Interfaces;
+using CableNews.Application.Common.Models;
 using CableNews.Domain.Entities;
 using CableNews.Domain.Enums;
 using CableNews.Infrastructure.Configuration;
@@ -14,12 +15,18 @@ public class GeminiClassifierService : ILlmClassifierService
 {
     private readonly HttpClient _httpClient;
     private readonly GeminiConfig _config;
+    private readonly NewsAgentConfig _agentConfig;
     private readonly ILogger<GeminiClassifierService> _logger;
 
-    public GeminiClassifierService(HttpClient httpClient, IOptions<GeminiConfig> config, ILogger<GeminiClassifierService> logger)
+    public GeminiClassifierService(
+        HttpClient httpClient, 
+        IOptions<GeminiConfig> config, 
+        IOptions<NewsAgentConfig> agentConfig,
+        ILogger<GeminiClassifierService> logger)
     {
         _httpClient = httpClient;
         _config = Guard.Against.Null(config.Value);
+        _agentConfig = Guard.Against.Null(agentConfig.Value);
         _logger = logger;
     }
 
@@ -32,18 +39,16 @@ public class GeminiClassifierService : ILlmClassifierService
 
         var url = $"https://generativelanguage.googleapis.com/v1beta/models/{_config.ModelId}:generateContent?key={_config.ApiKey}";
 
-        var validCategories = new[]
+        var configuredCategories = _agentConfig.Categories.Select(c => c.Name).ToList();
+        if (!configuredCategories.Contains("Competencia", StringComparer.OrdinalIgnoreCase))
         {
-            "Energía y Redes",
-            "Renovables e Hidrógeno",
-            "Construcción y Edificación",
-            "Infraestructura Pública",
-            "Telecom y Data Centers",
-            "Licitaciones y CAPEX",
-            "Macro y Regulación",
-            "Competencia",
-            "Industria Global del Cable"
-        };
+            configuredCategories.Add("Competencia");
+        }
+        if (!configuredCategories.Contains("Industria Global del Cable", StringComparer.OrdinalIgnoreCase))
+        {
+            configuredCategories.Add("Industria Global del Cable");
+        }
+        var validCategories = configuredCategories.ToArray();
 
         var nexansBrands = new[] { "Nexans", "Centelsa", "Indeco", "Madeco", "Ficap", "Incable" };
         var competitorsList = country.KeyCompetitors.Count > 0 ? string.Join(", ", country.KeyCompetitors) : "Prysmian, Southwire, Leoni, etc.";
@@ -55,7 +60,7 @@ public class GeminiClassifierService : ILlmClassifierService
             : BuildLocalClassifierPrompt(validCategories, nexansBrands, competitorsList, country.Name);
 
         var articlesJson = JsonSerializer.Serialize(
-            articles.Select(a => new { a.Hash, a.Title, Date = a.PublishedAt.ToString("yyyy-MM-dd") }));
+            articles.Select(a => new { a.Hash, a.Title, Date = a.PublishedAt.ToString("yyyy-MM-dd"), Summary = a.Summary }));
 
         var payload = new
         {
@@ -201,13 +206,14 @@ public class GeminiClassifierService : ILlmClassifierService
         - "isCrisisIndicator": true if negative news directly about Nexans or its subsidiaries
         - "isRelevant": true if the article matches ANY of these:
           1. Mentions any Nexans brand or subsidiary ({{string.Join(", ", brands)}})
-          2. Describes energy, infrastructure, mining, or construction projects in {{countryName}} or its region
-          3. Covers tenders, contract awards, public works, or CAPEX in {{countryName}}
-          4. Covers electricity grid, transmission lines, substations, renewable energy in {{countryName}}
-          5. Covers data centers, telecom infrastructure, or fiber optic deployment in {{countryName}}
-          6. Covers copper/aluminium prices, regulations, or tariffs affecting the cable industry
-          7. Construction, real estate, or housing projects with potential cable demand
-          8. Mining projects or expansions in {{countryName}}
+          2. Mentions any cable industry competitor ({{competitors}})
+          3. Describes energy, infrastructure, mining, or construction projects in {{countryName}} or its region
+          4. Covers tenders, contract awards, public works, or CAPEX in {{countryName}}
+          5. Covers electricity grid, transmission lines, substations, renewable energy in {{countryName}}
+          6. Covers data centers, telecom infrastructure, or fiber optic deployment in {{countryName}}
+          7. Covers copper/aluminium prices, regulations, or tariffs affecting the cable industry
+          8. Construction, real estate, or housing projects with potential cable demand
+          9. Mining projects or expansions in {{countryName}}
           EXCLUDE ENTIRELY: health news (dengue, virus), generic politics without infrastructure impact, sports, entertainment, celebrity news, natural disasters unless they destroyed power/telecom infrastructure
 
         Be INCLUSIVE: if in doubt, mark as relevant. Better to include borderline articles than miss industry intelligence.

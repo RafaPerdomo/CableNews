@@ -20,23 +20,52 @@ public class GmailSmtpEmailService : IEmailService
         _logger = logger;
     }
 
-    public async Task SendNewsletterAsync(string htmlContent, string countryName, string localBrand, string brandColor, CancellationToken cancellationToken)
+    public async Task SendNewsletterAsync(
+        string htmlContent, 
+        string countryName, 
+        string localBrand, 
+        string brandColor, 
+        string timezone,
+        List<string> customRecipients,
+        CancellationToken cancellationToken)
     {
         var message = new MimeMessage();
         message.From.Add(new MailboxAddress("Cable News Agent", _config.Username));
 
-        if (_config.Recipients == null || _config.Recipients.Count == 0)
+        var activeRecipients = customRecipients != null && customRecipients.Count > 0
+            ? customRecipients
+            : _config.Recipients;
+
+        if (activeRecipients == null || activeRecipients.Count == 0)
         {
-            _logger.LogWarning("No recipients configured. Email will be sent to the sender account ({Sender}).", _config.Username);
+            _logger.LogWarning("No recipients configured for {CountryName}. Email will be sent to the sender account ({Sender}).", countryName, _config.Username);
             message.To.Add(new MailboxAddress("Executive Review", _config.Username));
         }
         else
         {
-            foreach (var recipient in _config.Recipients)
+            foreach (var recipient in activeRecipients)
                 message.To.Add(new MailboxAddress("Subscriber", recipient));
         }
 
-        var tz = TimeZoneInfo.FindSystemTimeZoneById(OperatingSystem.IsWindows() ? "SA Pacific Standard Time" : "America/Bogota");
+        TimeZoneInfo tz;
+        try
+        {
+            tz = TimeZoneInfo.FindSystemTimeZoneById(timezone);
+        }
+        catch (TimeZoneNotFoundException)
+        {
+            var fallbackId = timezone switch
+            {
+                "America/Bogota" => "SA Pacific Standard Time",
+                "America/Lima" => "SA Pacific Standard Time",
+                "America/Santiago" => "Pacific SA Standard Time",
+                "America/Guayaquil" => "SA Pacific Standard Time",
+                "America/Sao_Paulo" => "E. South America Standard Time",
+                _ => "SA Pacific Standard Time"
+            };
+            tz = TimeZoneInfo.FindSystemTimeZoneById(OperatingSystem.IsWindows() ? fallbackId : timezone);
+        }
+
         var localNow = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, tz);
 
         message.Subject = $"📰 CableNews Report – {countryName} – {localNow:yyyy-MM-dd}";
@@ -118,6 +147,6 @@ public class GmailSmtpEmailService : IEmailService
         await client.SendAsync(message, cancellationToken);
         await client.DisconnectAsync(true, cancellationToken);
 
-        _logger.LogInformation("Email sent successfully to {Recipient}", _config.Username);
+        _logger.LogInformation("Email sent successfully for {CountryName} to {Count} recipients.", countryName, activeRecipients?.Count ?? 1);
     }
 }

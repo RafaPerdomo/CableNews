@@ -20,4 +20,5 @@ public class CountryConfig : BaseEntity
     public List<string> MacroSignals { get; init; } = [];
     public List<string> ExtraEntities { get; init; } = [];
     public List<string> SalesIntelligence { get; init; } = [];
+    public List<string> EmailRecipients { get; init; } = [];
 }

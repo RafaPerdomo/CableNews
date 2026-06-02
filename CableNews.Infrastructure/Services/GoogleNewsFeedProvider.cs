@@ -17,6 +17,10 @@ public class GoogleNewsFeedProvider : INewsFeedProvider
     {
         _httpClient = httpClient;
         _logger = logger;
+        if (!_httpClient.DefaultRequestHeaders.Contains("User-Agent"))
+        {
+            _httpClient.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36");
+        }
     }
 
     public async Task<List<Article>> FetchNewsAsync(CountryConfig countryConfig, NewsAgentConfig agentConfig, CancellationToken cancellationToken)
@@ -58,6 +62,10 @@ public class GoogleNewsFeedProvider : INewsFeedProvider
             AddCompetitorQueries(countryConfig, queries, days);
             AddGlobalIndustryQueries(countryConfig, queries);
         }
+        else
+        {
+            AddLocalCompetitorQueries(countryConfig, queries, locationSuffix, days);
+        }
 
         AddBrandQueries(countryConfig, queries, locationSuffix, days);
 
@@ -80,7 +88,8 @@ public class GoogleNewsFeedProvider : INewsFeedProvider
             try
             {
                 var response = await _httpClient.GetStringAsync(url, cancellationToken);
-                var xdoc = XDocument.Parse(response);
+                var sanitized = SanitizeXml(response);
+                var xdoc = XDocument.Parse(sanitized);
                 var items = xdoc.Descendants("item").Take(100).ToList();
                 int added = 0;
 
@@ -119,7 +128,7 @@ public class GoogleNewsFeedProvider : INewsFeedProvider
 
     public async Task<List<Article>> ResolveUrlsAsync(List<Article> articles, CancellationToken cancellationToken)
     {
-        _logger.LogInformation("Resolving {Count} Google redirect URLs...", articles.Count);
+        _logger.LogInformation("Resolving {Count} Google redirect URLs and fetching page contents...", articles.Count);
 
         var resolved = new Article[articles.Count];
         var semaphore = new SemaphoreSlim(5);
@@ -129,6 +138,15 @@ public class GoogleNewsFeedProvider : INewsFeedProvider
             try
             {
                 var realUrl = await ResolveGoogleRedirectAsync(article.Url, cancellationToken);
+                
+                string contentText = string.Empty;
+                if (!IsGoogleRedirectUrl(realUrl))
+                {
+                    contentText = await FetchArticleWebpageContentAsync(realUrl, cancellationToken);
+                }
+
+                var summary = !string.IsNullOrWhiteSpace(contentText) ? contentText : article.Summary;
+
                 resolved[index] = new Article
                 {
                     Hash = article.Hash,
@@ -136,7 +154,7 @@ public class GoogleNewsFeedProvider : INewsFeedProvider
                     Url = realUrl,
                     PublishedAt = article.PublishedAt,
                     CountryCode = article.CountryCode,
-                    Summary = article.Summary
+                    Summary = summary
                 };
             }
             finally
@@ -157,7 +175,7 @@ public class GoogleNewsFeedProvider : INewsFeedProvider
         if (!string.IsNullOrWhiteSpace(config.LocationQuery))
             return $" {config.LocationQuery}";
 
-        return config.IsGlobal ? string.Empty : $" location:{config.Name}";
+        return config.IsGlobal ? string.Empty : $" {config.Name}";
     }
 
     private static void AddCompetitorQueries(CountryConfig config, List<string> queries, int days)
@@ -182,6 +200,35 @@ public class GoogleNewsFeedProvider : INewsFeedProvider
             var shortName = comp.Split('(')[0].Trim().Split(' ')[0];
             var actions = string.Join(" OR ", actionTerms);
             queries.Add($"({shortName}) AND ({actions}) when:7d");
+        }
+    }
+
+    private static void AddLocalCompetitorQueries(CountryConfig config, List<string> queries, string locationSuffix, int days)
+    {
+        var searchTerms = config.CompetitorSearchTerms.Count > 0
+            ? config.CompetitorSearchTerms
+            : config.KeyCompetitors;
+
+        var validTerms = searchTerms.Where(t => !string.IsNullOrWhiteSpace(t)).ToList();
+        if (validTerms.Count == 0) return;
+
+        foreach (var chunk in validTerms.Chunk(4))
+        {
+            var joined = string.Join(" OR ", chunk.Select(c => c.Contains(' ') ? $"\"{c}\"" : c));
+            queries.Add($"({joined}){locationSuffix} when:7d");
+            queries.Add($"({joined}){locationSuffix} when:{days}d");
+        }
+
+        var isPortuguese = config.Code == "BR";
+        var actionTerms = isPortuguese
+            ? new[] { "contrato", "licitação", "investimento", "aquisição", "fábrica", "planta", "projeto" }
+            : new[] { "contrato", "licitación", "inversión", "adquisición", "fábrica", "planta", "proyecto" };
+
+        foreach (var comp in config.KeyCompetitors.Take(6).Where(c => !string.IsNullOrWhiteSpace(c)))
+        {
+            var shortName = comp.Split('(')[0].Trim().Split(' ')[0];
+            var actions = string.Join(" OR ", actionTerms);
+            queries.Add($"({shortName}) AND ({actions}){locationSuffix} when:7d");
         }
     }
 
@@ -239,7 +286,8 @@ public class GoogleNewsFeedProvider : INewsFeedProvider
             {
                 _logger.LogInformation("Fetching static RSS feed {Url} for {Country}", feedUrl, config.Name);
                 var response = await _httpClient.GetStringAsync(feedUrl, cancellationToken);
-                var xdoc = XDocument.Parse(response);
+                var sanitized = SanitizeXml(response);
+                var xdoc = XDocument.Parse(sanitized);
                 var items = xdoc.Descendants("item").Take(50).ToList();
                 int added = 0;
 
@@ -286,6 +334,9 @@ public class GoogleNewsFeedProvider : INewsFeedProvider
 
         var articleUrl = ExtractUrlFromDescription(description) ?? googleLink;
         var hash = ComputeSha256(title);
+        var summary = CleanHtml(description);
+        if (summary.Length > 500)
+            summary = summary[..500] + "...";
 
         return new Article
         {
@@ -294,8 +345,109 @@ public class GoogleNewsFeedProvider : INewsFeedProvider
             Url = articleUrl,
             PublishedAt = pubDate,
             CountryCode = countryCode,
-            Summary = string.Empty
+            Summary = summary
         };
+    }
+
+    private static string SanitizeXml(string xml)
+    {
+        if (string.IsNullOrWhiteSpace(xml)) return string.Empty;
+
+        var sb = new System.Text.StringBuilder(xml.Length);
+        foreach (var c in xml)
+        {
+            if (c == 0x9 || c == 0xA || c == 0xD || (c >= 0x20 && c <= 0xD7FF) || (c >= 0xE000 && c <= 0xFFFD))
+            {
+                sb.Append(c);
+            }
+        }
+        var clean = sb.ToString();
+
+        clean = System.Text.RegularExpressions.Regex.Replace(
+            clean,
+            @"&(?!amp;|lt;|gt;|quot;|apos;|#[0-9]+;|#x[0-9a-fA-F]+;)",
+            "&amp;");
+
+        return clean;
+    }
+
+    private static string CleanHtml(string html)
+    {
+        if (string.IsNullOrWhiteSpace(html)) return string.Empty;
+        var clean = System.Text.RegularExpressions.Regex.Replace(html, "<.*?>", string.Empty);
+        clean = System.Net.WebUtility.HtmlDecode(clean);
+        clean = System.Net.WebUtility.HtmlDecode(clean);
+        return clean.Trim();
+    }
+
+    private async Task<string> FetchArticleWebpageContentAsync(string url, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(url) || !url.StartsWith("http", StringComparison.OrdinalIgnoreCase))
+            return string.Empty;
+
+        if (url.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase) ||
+            url.EndsWith(".xml", StringComparison.OrdinalIgnoreCase) ||
+            url.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
+        {
+            return string.Empty;
+        }
+
+        try
+        {
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            cts.CancelAfter(TimeSpan.FromSeconds(8));
+
+            using var request = new HttpRequestMessage(HttpMethod.Get, url);
+            request.Headers.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36");
+            request.Headers.Add("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
+
+            var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cts.Token);
+            if (!response.IsSuccessStatusCode)
+                return string.Empty;
+
+            var contentType = response.Content.Headers.ContentType?.MediaType;
+            if (contentType != null && !contentType.Contains("text/html") && !contentType.Contains("xml"))
+                return string.Empty;
+
+            var html = await response.Content.ReadAsStringAsync(cts.Token);
+            if (string.IsNullOrWhiteSpace(html))
+                return string.Empty;
+
+            var paragraphs = new List<string>();
+            var pMatches = System.Text.RegularExpressions.Regex.Matches(html, @"<p[^>]*>(.*?)</p>", System.Text.RegularExpressions.RegexOptions.Singleline | System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+            foreach (System.Text.RegularExpressions.Match match in pMatches)
+            {
+                var pText = CleanHtml(match.Groups[1].Value);
+                if (pText.Length > 20)
+                {
+                    paragraphs.Add(pText);
+                }
+            }
+
+            if (paragraphs.Count == 0)
+            {
+                var bodyMatch = System.Text.RegularExpressions.Regex.Match(html, @"<body[^>]*>(.*?)</body>", System.Text.RegularExpressions.RegexOptions.Singleline | System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                if (bodyMatch.Success)
+                {
+                    var bodyText = CleanHtml(bodyMatch.Groups[1].Value);
+                    bodyText = System.Text.RegularExpressions.Regex.Replace(bodyText, @"\s+", " ");
+                    if (bodyText.Length > 100)
+                    {
+                        return bodyText.Length > 2500 ? bodyText[..2500] : bodyText;
+                    }
+                }
+                return string.Empty;
+            }
+
+            var fullText = string.Join("\n\n", paragraphs);
+            return fullText.Length > 2500 ? fullText[..2500] : fullText;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug("Could not fetch webpage content for {Url}: {Msg}", url, ex.Message);
+            return string.Empty;
+        }
     }
 
     private static bool IsGoogleRedirectUrl(string url) =>

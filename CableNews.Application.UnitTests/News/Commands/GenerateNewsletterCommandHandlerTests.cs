@@ -85,13 +85,20 @@ public class GenerateNewsletterCommandHandlerTests
             .Setup(x => x.CalculateMetricsAsync(It.IsAny<List<ArticleAnalysis>>(), It.IsAny<int>(), It.IsAny<CountryConfig>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(metrics);
         _summarizer
-            .Setup(x => x.SummarizeArticlesAsync(It.IsAny<List<Article>>(), It.IsAny<PrMetricsReport>(), It.IsAny<List<TenderResult>>(), It.IsAny<CountryConfig>(), It.IsAny<CancellationToken>()))
+            .Setup(x => x.SummarizeArticlesAsync(It.IsAny<List<AnalyzedArticle>>(), It.IsAny<PrMetricsReport>(), It.IsAny<List<TenderResult>>(), It.IsAny<CountryConfig>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync("<h1>Newsletter</h1><p>Content</p>");
 
         var result = await _handler.Handle(new GenerateNewsletterCommand(config), CancellationToken.None);
 
         result.ShouldBeTrue();
-        _emailService.Verify(x => x.SendNewsletterAsync(It.IsAny<string>(), "Colombia", It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Once);
+        _emailService.Verify(x => x.SendNewsletterAsync(
+            It.IsAny<string>(), 
+            "Colombia", 
+            It.IsAny<string>(), 
+            It.IsAny<string>(), 
+            It.IsAny<string>(), 
+            It.IsAny<List<string>>(), 
+            It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Test]
@@ -125,13 +132,20 @@ public class GenerateNewsletterCommandHandlerTests
             .Setup(x => x.CalculateMetricsAsync(It.IsAny<List<ArticleAnalysis>>(), It.IsAny<int>(), It.IsAny<CountryConfig>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(metrics);
         _summarizer
-            .Setup(x => x.SummarizeArticlesAsync(It.IsAny<List<Article>>(), It.IsAny<PrMetricsReport>(), It.IsAny<List<TenderResult>>(), It.IsAny<CountryConfig>(), It.IsAny<CancellationToken>()))
+            .Setup(x => x.SummarizeArticlesAsync(It.IsAny<List<AnalyzedArticle>>(), It.IsAny<PrMetricsReport>(), It.IsAny<List<TenderResult>>(), It.IsAny<CountryConfig>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(string.Empty);
 
         var result = await _handler.Handle(new GenerateNewsletterCommand(config), CancellationToken.None);
 
         result.ShouldBeFalse();
-        _emailService.Verify(x => x.SendNewsletterAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+        _emailService.Verify(x => x.SendNewsletterAsync(
+            It.IsAny<string>(), 
+            It.IsAny<string>(), 
+            It.IsAny<string>(), 
+            It.IsAny<string>(), 
+            It.IsAny<string>(), 
+            It.IsAny<List<string>>(), 
+            It.IsAny<CancellationToken>()), Times.Never);
     }
 
     private static NewsAgentConfig CreateConfig()

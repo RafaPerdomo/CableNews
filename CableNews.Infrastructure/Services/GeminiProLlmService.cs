@@ -15,17 +15,23 @@ public class GeminiProLlmService : ILlmSummarizerService
 {
     private readonly HttpClient _httpClient;
     private readonly GeminiConfig _config;
+    private readonly NewsAgentConfig _agentConfig;
     private readonly ILogger<GeminiProLlmService> _logger;
 
-    public GeminiProLlmService(HttpClient httpClient, IOptions<GeminiConfig> config, ILogger<GeminiProLlmService> logger)
+    public GeminiProLlmService(
+        HttpClient httpClient, 
+        IOptions<GeminiConfig> config, 
+        IOptions<NewsAgentConfig> agentConfig,
+        ILogger<GeminiProLlmService> logger)
     {
         _httpClient = httpClient;
         _config = Guard.Against.Null(config.Value);
+        _agentConfig = Guard.Against.Null(agentConfig.Value);
         _logger = logger;
     }
 
     public async Task<string> SummarizeArticlesAsync(
-        List<Article> articles, 
+        List<AnalyzedArticle> articles, 
         PrMetricsReport metrics,
         List<TenderResult> tenders,
         CountryConfig countryConfig, 
@@ -35,14 +41,34 @@ public class GeminiProLlmService : ILlmSummarizerService
 
         var url = $"https://generativelanguage.googleapis.com/v1beta/models/{_config.ModelId}:generateContent?key={_config.ApiKey}";
 
-        var articlesText = new StringBuilder($"Noticias para {countryConfig.Name}:\n\n");
-        foreach (var article in articles)
-        {
-            var dateStr = article.PublishedAt != default ? article.PublishedAt.ToString("yyyy-MM-dd") : "Fecha desconocida";
-            articlesText.AppendLine($"- [{dateStr}] {article.Title} - URL: {article.Url}");
-        }
-
         var competitors = string.Join(", ", countryConfig.KeyCompetitors.Take(6));
+
+        var globalCategoriesBuilder = new StringBuilder();
+        foreach (var cat in _agentConfig.Categories)
+        {
+            globalCategoriesBuilder.AppendLine($"- {cat.Name}");
+        }
+        var globalCategoriesStr = globalCategoriesBuilder.ToString();
+
+        var localCategoriesBuilder = new StringBuilder();
+        int catIndex = 1;
+        foreach (var cat in _agentConfig.Categories)
+        {
+            if (cat.Name == "Competencia" || cat.Name == "Industria Global del Cable") continue;
+            
+            var keywordExplanation = string.Join(", ", cat.Keywords.Take(5));
+            if (cat.Name == "Licitaciones y CAPEX")
+            {
+                localCategoriesBuilder.AppendLine($"{catIndex}. {cat.Name} ({keywordExplanation}). AQUÍ DEBES INCLUIR LAS LICITACIONES COMPROBADAS PROPORCIONADAS EN EL NODO <LICITACIONES>.");
+            }
+            else
+            {
+                localCategoriesBuilder.AppendLine($"{catIndex}. {cat.Name} ({keywordExplanation}).");
+            }
+            catIndex++;
+        }
+        var localCategoriesStr = localCategoriesBuilder.ToString();
+
         var systemInstruction = countryConfig.IsGlobal || countryConfig.Code == "AMERICAS"
             ? $@"You are a senior analyst specializing in the global cable and energy infrastructure industry.
 Your task is to read the supplied news articles and produce an Executive Intelligence Report on Nexans Group worldwide, in HTML format.
@@ -57,12 +83,7 @@ CRITICAL RULES:
 7. EMPTY SECTIONS: If a category has no relevant news, do NOT generate its <h2> tag. The MANDATORY sections are: 🏢 Competitor Intelligence, 📰 Nexans Worldwide, and Strategic Recommendations.
 
 Classify articles into these categories (only those with at least one RELEVANT article):
-- Energy & Grid Infrastructure
-- Renewables & Offshore Wind
-- Telecom & Data Centers
-- Mining & Industrial
-- Commodities & Supply Chain
-- M&A / Corporate
+{globalCategoriesStr}
 
 SEPARATE COMPETITOR INTELLIGENCE SECTION (ALWAYS INCLUDE, this is the MOST IMPORTANT section):
 After the industry categories above, add a clearly separated section:
@@ -83,7 +104,7 @@ HTML FORMAT (strict, valid HTML):
 One <h2> per category, news as <ul><li>.
 
 Format per article (date is MANDATORY before the link):
-[traffic light emoji] <strong>Title:</strong> Executive summary (max 2 lines, no exaggeration). [YYYY-MM-DD] <a href='URL'>Link</a>.
+[traffic light emoji] <strong>Title:</strong> Detailed executive summary highlighting key business data (e.g., CAPEX, capacity, quantities, location, contracting entities, and competitor details) extracted from the article's full text. [YYYY-MM-DD] <a href='URL'>Link</a>.
 
 Traffic light (commercial relevance for a cable manufacturer):
 - 🔴 High: Direct sales opportunity (contract awarded, tender open, plant construction, new transmission line, announced investment)
@@ -102,17 +123,22 @@ REGLAS CRÍTICAS:
 1. RELEVANCIA ESTRICTA: Tu empresa vende CABLES ELÉCTRICOS, DE TELECOMUNICACIONES y SOLUCIONES PARA INFRAESTRUCTURA Y MINERÍA. Solo incluye noticias que impacten directamente este negocio (licitaciones, nuevos proyectos de infraestructura, energía, minería, data centers). EXCLUYE TOTALMENTE noticias sobre salud (ej. dengue, virus), política general sin impacto en infraestructura, farándula, o desastres naturales genéricos (ej. sismos) a menos que hayan destruido infraestructura clave.
 2. DEDUPLICACIÓN: Si múltiples noticias describen el mismo evento, incluye solo la más reciente.
 3. SOLO HECHOS: Solo usa información explícita en las noticias. No infieras ni inventes datos.
-4. CATEGORÍAS VACÍAS: Si una categoría no tiene noticias relevantes, NO incluyas el tag <h2> de esa categoría. Omite completamente el bloque HTML de esa sección. Las únicas secciones obligatorias son: Nexans en {countryConfig.Name} y Recomendaciones.
+4. CATEGORÍAS VACÍAS: Si una categoría no tiene noticias relevantes, NO incluyas el tag <h2> de esa categoría. Omite completamente el bloque HTML de esa sección. Las únicas secciones obligatorias son: Nexans en {countryConfig.Name}, Inteligencia de Competencia y Recomendaciones.
+5. CLASIFICACIÓN PRE-EXISTENTE: Las noticias suministradas ya contienen la propiedad 'Category' (Categoría) y metadatos de marcas y competidores. DEBES utilizarlos y respetarlos para agrupar los artículos en sus respectivas secciones y calcular el reporte de forma consistente.
 
 Categorías Estratégicas para agrupar (usa <h2> para el título, NO agregues atributos style a este h2):
-1. Energía y Redes (cables, transmisión, electrificación, energías renovables, subestaciones).
-2. Construcción y Edificación (vivienda, cables BTD, edificios inteligentes).
-3. Infraestructura Pública (vías, metro, aeropuertos, gasoductos, proyectos estatales).
-4. Telecom y Data Centers (fibra óptica, nodos, operadores, centros de datos).
-5. Licitaciones y CAPEX (proyectos adjudicados, créditos para obras, expansiones de clientes). AQUÍ DEBES INCLUIR LAS LICITACIONES COMPROBADAS PROPORCIONADAS EN EL NODO <LICITACIONES>.
-6. Macro y Regulación (leyes, tarifas energéticas, materias primas como cobre/aluminio).
-7. 📰 Nexans en {countryConfig.Name} (SIEMPRE INCLUIR. Menciones a Nexans, Centelsa, Indeco, Madeco, Ficap o Incable. Si no hay noticias, escribe: Sin menciones de Nexans en este período.)
-8. 🎯 Oportunidades Comerciales (Solo si hay eventos verificables: licitaciones abiertas, adjudicaciones, cierres financieros, nuevos proyectos)
+{localCategoriesStr}
+{catIndex}. 📰 Nexans en {countryConfig.Name} (SIEMPRE INCLUIR. Menciones a Nexans, Centelsa, Indeco, Madeco, Ficap o Incable. Si no hay noticias, escribe: Sin menciones de Nexans en este período.)
+{catIndex + 1}. 🎯 Oportunidades Comerciales (Solo si hay eventos verificables: licitaciones abiertas, adjudicaciones, cierres financieros, nuevos proyectos)
+
+SECCIÓN SEPARADA DE INTELIGENCIA DE COMPETENCIA (SIEMPRE INCLUIR, es la sección MÁS IMPORTANTE del reporte):
+Después de las categorías industriales anteriores, añade una sección claramente separada:
+<h2>🏢 Inteligencia de Competencia — Movimientos en {countryConfig.Name}</h2>
+Agrupa las noticias de la competencia POR COMPETIDOR. Para cada competidor local que tenga noticias, crea un tag <h3> con el nombre del competidor.
+Competidores a monitorear: {competitors}.
+Incluye: contratos adjudicados, proyectos ganados, inversiones, expansiones, adquisiciones, nuevos productos o cambios de liderazgo en la región.
+Utiliza los metadatos de competidores extraídos de los artículos para realizar esta sección.
+Si un competidor no tiene noticias, NO crees su tag <h3>. Si NINGÚN competidor tiene noticias, escribe: Sin actividad significativa de competidores detectada en este período.
 
 INSTRUCCIONES EXTRA PARA LAS LICITACIONES:
 He proveído una lista adicional en el tag `<LICITACIONES>`. DEBES incluirlas todas de forma destacada dentro de la categoría ""Licitaciones y CAPEX"". 
@@ -129,7 +155,7 @@ Formato HTML estricto (HTML válido y bien formado):
 Bajo el título del país, crea un <h2> por Categoría (Ej: <h2>Energía y Redes</h2>).
 Bajo cada categoría, lista las noticias usando <ul><li>.
 Usa 🟢, 🟡, o 🔴 al inicio de cada <li> según el sentimiento.
-Formato de cada noticia: <li>[Emoji] <strong>Título</strong>: Resumen breve pero con datos duros. [Fecha] <a href='URL'>Enlace</a></li>
+Formato de cada noticia: <li>[Emoji] <strong>Título</strong>: Resumen ejecutivo detallado destacando datos específicos y duros (monto de inversión, CAPEX, capacidad, distancias, entidad contratante, plazos, etc.) extraídos del contenido completo de la noticia. [Fecha] <a href='URL'>Enlace</a></li>
 
 Semáforo (relevancia comercial para un vendedor de cables):
 - 🔴 Alta: Oportunidad de venta directa (ej. licitación abierta, adjudicación confirmada, construcción de planta, nueva subestación o nueva línea de transmisión, data center anunciado con inversión/contratación)
@@ -159,10 +185,16 @@ SALIDA:
         
         var articlesJson = JsonSerializer.Serialize(articles.Select(a => new 
         {
-            a.Title,
-            a.Url,
-            a.PublishedAt,
-            a.Summary
+            a.Article.Title,
+            a.Article.Url,
+            PublishedAt = a.Article.PublishedAt != default ? a.Article.PublishedAt.ToString("yyyy-MM-dd") : "Fecha desconocida",
+            a.Article.Summary,
+            a.Analysis.Category,
+            Sentiment = a.Analysis.Sentiment.ToString(),
+            a.Analysis.SentimentScore,
+            MentionedBrands = string.Join(", ", a.Analysis.MentionedBrands),
+            MentionedCompetitors = string.Join(", ", a.Analysis.MentionedCompetitors),
+            a.Analysis.IsCrisisIndicator
         }));
 
         var tendersJson = JsonSerializer.Serialize(tenders.Select(t => new 
