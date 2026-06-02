@@ -47,7 +47,7 @@ public class SecopTenderProvider : ITenderProvider
                         TenderId = t.ProcesoDeCompra ?? "",
                         Title = t.ObjetoDelContrato ?? "",
                         Entity = t.NombreEntidad ?? "",
-                        Url = t.UrlProceso ?? $"https://community.secop.gov.co/Public/Tendering/OpportunityDetail/Index?noticeUID={t.ProcesoDeCompra}",
+                        Url = t.UrlProceso?.Url ?? $"https://community.secop.gov.co/Public/Tendering/OpportunityDetail/Index?noticeUID={t.ProcesoDeCompra}",
                         EstimatedValue = t.ValorDelContrato,
                         Currency = "COP",
                         PublishedAt = t.FechaDeFirma ?? DateTimeOffset.UtcNow,
@@ -76,12 +76,18 @@ public class SecopTenderProvider : ITenderProvider
         public string? NombreEntidad { get; init; }
         
         [JsonPropertyName("urlproceso")]
-        public string? UrlProceso { get; init; }
+        public SecopUrl? UrlProceso { get; init; }
         
         [JsonPropertyName("valor_del_contrato")]
         public decimal? ValorDelContrato { get; init; }
         
         [JsonPropertyName("fecha_de_firma")]
         public DateTimeOffset? FechaDeFirma { get; init; }
+    }
+
+    private record SecopUrl
+    {
+        [JsonPropertyName("url")]
+        public string? Url { get; init; }
     }
 }
