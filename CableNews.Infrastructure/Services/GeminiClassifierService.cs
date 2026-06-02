@@ -59,106 +59,122 @@ public class GeminiClassifierService : ILlmClassifierService
             ? BuildGlobalClassifierPrompt(validCategories, nexansBrands, competitorsList)
             : BuildLocalClassifierPrompt(validCategories, nexansBrands, competitorsList, country.Name);
 
-        var articlesJson = JsonSerializer.Serialize(
-            articles.Select(a => new { a.Hash, a.Title, Date = a.PublishedAt.ToString("yyyy-MM-dd"), Summary = a.Summary }));
+        var results = new List<ArticleAnalysis>();
 
-        var payload = new
+        foreach (var batch in articles.Chunk(50))
         {
-            system_instruction = new
-            {
-                parts = new[] { new { text = prompt } }
-            },
-            contents = new[]
-            {
-                new { parts = new[] { new { text = articlesJson } } }
-            }
-        };
+            var articlesJson = JsonSerializer.Serialize(
+                batch.Select(a => new { a.Hash, a.Title, Date = a.PublishedAt.ToString("yyyy-MM-dd"), Summary = a.Summary }));
 
-        const int maxRetries = 3;
-
-        for (int attempt = 0; attempt <= maxRetries; attempt++)
-        {
-            try
+            var payload = new
             {
-                var response = await _httpClient.PostAsJsonAsync(url, payload, cancellationToken);
-                var jsonResponse = await response.Content.ReadAsStringAsync(cancellationToken);
-
-                if (response.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
+                system_instruction = new
                 {
-                    var retrySeconds = ExtractRetryDelay(jsonResponse);
-                    if (attempt < maxRetries)
-                    {
-                        _logger.LogWarning("Gemini Classifier rate limit (429). Waiting {Seconds}s. Retry {Attempt}/{Max}",
-                            retrySeconds, attempt + 1, maxRetries);
-                        await Task.Delay(TimeSpan.FromSeconds(retrySeconds), cancellationToken);
-                        continue;
-                    }
-                    _logger.LogError("Gemini Classifier rate limit exceeded after {Max} retries", maxRetries);
-                    return [];
+                    parts = new[] { new { text = prompt } }
+                },
+                contents = new[]
+                {
+                    new { parts = new[] { new { text = articlesJson } } }
                 }
+            };
 
-                if (!response.IsSuccessStatusCode)
+            const int maxRetries = 3;
+            List<ArticleAnalysis>? batchResults = null;
+
+            for (int attempt = 0; attempt <= maxRetries; attempt++)
+            {
+                try
                 {
-                    _logger.LogError("Gemini Classifier API Error: {StatusCode} - {Response}", response.StatusCode, jsonResponse);
+                    var response = await _httpClient.PostAsJsonAsync(url, payload, cancellationToken);
+                    var jsonResponse = await response.Content.ReadAsStringAsync(cancellationToken);
+
+                    if (response.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
+                    {
+                        var retrySeconds = ExtractRetryDelay(jsonResponse);
+                        if (attempt < maxRetries)
+                        {
+                            _logger.LogWarning("Gemini Classifier rate limit (429). Waiting {Seconds}s. Retry {Attempt}/{Max}",
+                                retrySeconds, attempt + 1, maxRetries);
+                            await Task.Delay(TimeSpan.FromSeconds(retrySeconds), cancellationToken);
+                            continue;
+                        }
+                        _logger.LogError("Gemini Classifier rate limit exceeded after {Max} retries", maxRetries);
+                        break;
+                    }
+
+                    if (!response.IsSuccessStatusCode)
+                    {
+                        _logger.LogError("Gemini Classifier API Error: {StatusCode} - {Response}", response.StatusCode, jsonResponse);
+                        if (attempt < maxRetries)
+                        {
+                            await Task.Delay(TimeSpan.FromSeconds(5 * (attempt + 1)), cancellationToken);
+                            continue;
+                        }
+                        break;
+                    }
+
+                    using var doc = JsonDocument.Parse(jsonResponse);
+
+                    if (!doc.RootElement.TryGetProperty("candidates", out var candidates) ||
+                        candidates.GetArrayLength() == 0)
+                    {
+                        _logger.LogWarning("Gemini Classifier returned no candidates");
+                        break;
+                    }
+
+                    var firstCandidate = candidates[0];
+                    if (!firstCandidate.TryGetProperty("content", out var content) ||
+                        !content.TryGetProperty("parts", out var parts) ||
+                        parts.GetArrayLength() == 0)
+                    {
+                        _logger.LogWarning("Gemini Classifier returned empty content/parts");
+                        break;
+                    }
+
+                    var text = parts[0].GetProperty("text").GetString();
+                    var cleanJson = text?.Replace("```json", "").Replace("```", "").Trim() ?? "[]";
+
+                    var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+                    var dtos = JsonSerializer.Deserialize<List<ArticleAnalysisDto>>(cleanJson, options);
+
+                    if (dtos != null)
+                    {
+                        batchResults = dtos.Where(d => d.IsRelevant).Select(d => new ArticleAnalysis
+                        {
+                            ArticleHash = d.Hash ?? string.Empty,
+                            Sentiment = Enum.TryParse<SentimentType>(d.Sentiment, true, out var s) ? s : SentimentType.Neutral,
+                            SentimentScore = d.SentimentScore,
+                            Category = validCategories.Contains(d.Category) ? d.Category! : "Macro y Regulación",
+                            MentionedBrands = d.MentionedBrands ?? [],
+                            MentionedCompetitors = d.MentionedCompetitors ?? [],
+                            IsCrisisIndicator = d.IsCrisisIndicator
+                        })
+                        .Where(a => !string.IsNullOrEmpty(a.ArticleHash))
+                        .ToList();
+                        break;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Exception calling Gemini Classifier API (attempt {Attempt})", attempt);
                     if (attempt < maxRetries)
                     {
                         await Task.Delay(TimeSpan.FromSeconds(5 * (attempt + 1)), cancellationToken);
                         continue;
                     }
-                    return [];
                 }
-
-                using var doc = JsonDocument.Parse(jsonResponse);
-
-                if (!doc.RootElement.TryGetProperty("candidates", out var candidates) ||
-                    candidates.GetArrayLength() == 0)
-                {
-                    _logger.LogWarning("Gemini Classifier returned no candidates");
-                    return [];
-                }
-
-                var firstCandidate = candidates[0];
-                if (!firstCandidate.TryGetProperty("content", out var content) ||
-                    !content.TryGetProperty("parts", out var parts) ||
-                    parts.GetArrayLength() == 0)
-                {
-                    _logger.LogWarning("Gemini Classifier returned empty content/parts");
-                    return [];
-                }
-
-                var text = parts[0].GetProperty("text").GetString();
-                var cleanJson = text?.Replace("```json", "").Replace("```", "").Trim() ?? "[]";
-
-                var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
-                var dtos = JsonSerializer.Deserialize<List<ArticleAnalysisDto>>(cleanJson, options);
-
-                if (dtos == null) return [];
-
-                return dtos.Where(d => d.IsRelevant).Select(d => new ArticleAnalysis
-                {
-                    ArticleHash = d.Hash ?? string.Empty,
-                    Sentiment = Enum.TryParse<SentimentType>(d.Sentiment, true, out var s) ? s : SentimentType.Neutral,
-                    SentimentScore = d.SentimentScore,
-                    Category = validCategories.Contains(d.Category) ? d.Category! : "Macro y Regulación",
-                    MentionedBrands = d.MentionedBrands ?? [],
-                    MentionedCompetitors = d.MentionedCompetitors ?? [],
-                    IsCrisisIndicator = d.IsCrisisIndicator
-                })
-                .Where(a => !string.IsNullOrEmpty(a.ArticleHash))
-                .ToList();
             }
-            catch (Exception ex)
+
+            if (batchResults != null)
             {
-                _logger.LogError(ex, "Exception calling Gemini Classifier API (attempt {Attempt})", attempt);
-                if (attempt < maxRetries)
-                {
-                    await Task.Delay(TimeSpan.FromSeconds(5 * (attempt + 1)), cancellationToken);
-                    continue;
-                }
+                results.AddRange(batchResults);
             }
+
+            await Task.Delay(1000, cancellationToken);
         }
 
-        return [];
+        return results;
+    }
     }
 
     private static string BuildGlobalClassifierPrompt(string[] categories, string[] brands, string competitors)
