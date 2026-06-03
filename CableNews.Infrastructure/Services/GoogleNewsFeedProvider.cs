@@ -43,31 +43,26 @@ public class GoogleNewsFeedProvider : INewsFeedProvider
             }
         }
 
-        AddQueryGroup(countryConfig.DemandDrivers, 7);
-        AddQueryGroup(countryConfig.Institutions, 7);
-        AddQueryGroup(countryConfig.Operators, 7);
-        AddQueryGroup(countryConfig.MacroSignals, 7);
-        AddQueryGroup(countryConfig.ExtraEntities, 7);
-        AddQueryGroup(countryConfig.SalesIntelligence, 7);
+        var maxDays = Math.Max(7, days);
 
-        AddQueryGroup(countryConfig.DemandDrivers, days);
-        AddQueryGroup(countryConfig.Institutions, days);
-        AddQueryGroup(countryConfig.Operators, days);
-        AddQueryGroup(countryConfig.MacroSignals, days);
-        AddQueryGroup(countryConfig.ExtraEntities, days);
-        AddQueryGroup(countryConfig.SalesIntelligence, days);
+        AddQueryGroup(countryConfig.DemandDrivers, maxDays);
+        AddQueryGroup(countryConfig.Institutions, maxDays);
+        AddQueryGroup(countryConfig.Operators, maxDays);
+        AddQueryGroup(countryConfig.MacroSignals, maxDays);
+        AddQueryGroup(countryConfig.ExtraEntities, maxDays);
+        AddQueryGroup(countryConfig.SalesIntelligence, maxDays);
 
         if (IsAmericasOrGlobal(countryConfig))
         {
-            AddCompetitorQueries(countryConfig, queries, days);
+            AddCompetitorQueries(countryConfig, queries, maxDays);
             AddGlobalIndustryQueries(countryConfig, queries);
         }
         else
         {
-            AddLocalCompetitorQueries(countryConfig, queries, locationSuffix, days);
+            AddLocalCompetitorQueries(countryConfig, queries, locationSuffix, maxDays);
         }
 
-        AddBrandQueries(countryConfig, queries, locationSuffix, days);
+        AddBrandQueries(countryConfig, queries, locationSuffix, maxDays);
 
         var articleMap = new Dictionary<string, Article>(StringComparer.Ordinal);
 
@@ -178,7 +173,7 @@ public class GoogleNewsFeedProvider : INewsFeedProvider
         return config.IsGlobal ? string.Empty : $" {config.Name}";
     }
 
-    private static void AddCompetitorQueries(CountryConfig config, List<string> queries, int days)
+    private static void AddCompetitorQueries(CountryConfig config, List<string> queries, int maxDays)
     {
         var searchTerms = config.CompetitorSearchTerms.Count > 0
             ? config.CompetitorSearchTerms
@@ -190,8 +185,7 @@ public class GoogleNewsFeedProvider : INewsFeedProvider
         foreach (var chunk in validTerms.Chunk(4))
         {
             var joined = string.Join(" OR ", chunk.Select(c => c.Contains(' ') ? $"\"{c}\"" : c));
-            queries.Add($"({joined}) when:7d");
-            queries.Add($"({joined}) when:{days}d");
+            queries.Add($"({joined}) when:{maxDays}d");
         }
 
         var actionTerms = new[] { "contract", "awarded", "tender", "investment", "acquisition", "factory", "plant" };
@@ -199,11 +193,11 @@ public class GoogleNewsFeedProvider : INewsFeedProvider
         {
             var shortName = comp.Split('(')[0].Trim().Split(' ')[0];
             var actions = string.Join(" OR ", actionTerms);
-            queries.Add($"({shortName}) AND ({actions}) when:7d");
+            queries.Add($"({shortName}) AND ({actions}) when:{maxDays}d");
         }
     }
 
-    private static void AddLocalCompetitorQueries(CountryConfig config, List<string> queries, string locationSuffix, int days)
+    private static void AddLocalCompetitorQueries(CountryConfig config, List<string> queries, string locationSuffix, int maxDays)
     {
         var searchTerms = config.CompetitorSearchTerms.Count > 0
             ? config.CompetitorSearchTerms
@@ -215,8 +209,7 @@ public class GoogleNewsFeedProvider : INewsFeedProvider
         foreach (var chunk in validTerms.Chunk(4))
         {
             var joined = string.Join(" OR ", chunk.Select(c => c.Contains(' ') ? $"\"{c}\"" : c));
-            queries.Add($"({joined}){locationSuffix} when:7d");
-            queries.Add($"({joined}){locationSuffix} when:{days}d");
+            queries.Add($"({joined}){locationSuffix} when:{maxDays}d");
         }
 
         var isPortuguese = config.Code == "BR";
@@ -228,7 +221,7 @@ public class GoogleNewsFeedProvider : INewsFeedProvider
         {
             var shortName = comp.Split('(')[0].Trim().Split(' ')[0];
             var actions = string.Join(" OR ", actionTerms);
-            queries.Add($"({shortName}) AND ({actions}){locationSuffix} when:7d");
+            queries.Add($"({shortName}) AND ({actions}){locationSuffix} when:{maxDays}d");
         }
     }
 
@@ -250,20 +243,18 @@ public class GoogleNewsFeedProvider : INewsFeedProvider
         }
     }
 
-    private static void AddBrandQueries(CountryConfig config, List<string> queries, string locationSuffix, int days)
+    private static void AddBrandQueries(CountryConfig config, List<string> queries, string locationSuffix, int maxDays)
     {
         if (string.IsNullOrWhiteSpace(config.LocalNexansBrand)) return;
 
         var brandTerm = $"(Nexans OR \"{config.LocalNexansBrand}\")";
         if (IsAmericasOrGlobal(config))
         {
-            queries.Add($"{brandTerm} when:7d");
-            queries.Add($"{brandTerm} when:{days}d");
+            queries.Add($"{brandTerm} when:{maxDays}d");
         }
         else
         {
-            queries.Add($"{brandTerm}{locationSuffix} when:7d");
-            queries.Add($"{brandTerm}{locationSuffix} when:{days}d");
+            queries.Add($"{brandTerm}{locationSuffix} when:{maxDays}d");
         }
 
         var allBrands = new[]
@@ -274,13 +265,12 @@ public class GoogleNewsFeedProvider : INewsFeedProvider
             "\"Nexans Colombia\"", "\"Nexans Peru\"", "\"Nexans Chile\""
         };
         var crossBrandQuery = string.Join(" OR ", allBrands);
-        queries.Add($"({crossBrandQuery}) when:7d");
-        queries.Add($"({crossBrandQuery}) when:{days}d");
+        queries.Add($"({crossBrandQuery}) when:{maxDays}d");
     }
 
     private async Task FetchStaticRssFeeds(CountryConfig config, Dictionary<string, Article> articleMap, CancellationToken cancellationToken)
     {
-        foreach (var feedUrl in config.ExtraRssFeeds)
+        var tasks = config.ExtraRssFeeds.Select(async feedUrl =>
         {
             try
             {
@@ -291,26 +281,37 @@ public class GoogleNewsFeedProvider : INewsFeedProvider
                 var items = xdoc.Descendants("item").Take(50).ToList();
                 int added = 0;
 
+                var parsedArticles = new List<Article>();
                 foreach (var item in items)
                 {
                     var article = ParseRssItem(item, config.Code);
-                    if (article is null) continue;
-
-                    if (!articleMap.ContainsKey(article.Hash))
+                    if (article is not null)
                     {
-                        articleMap[article.Hash] = article;
-                        added++;
+                        parsedArticles.Add(article);
+                    }
+                }
+
+                lock (articleMap)
+                {
+                    foreach (var article in parsedArticles)
+                    {
+                        if (!articleMap.ContainsKey(article.Hash))
+                        {
+                            articleMap[article.Hash] = article;
+                            added++;
+                        }
                     }
                 }
 
                 _logger.LogInformation("Static feed {Url} added {Count} articles for {Country}", feedUrl, added, config.Name);
-                await Task.Delay(500, cancellationToken);
             }
             catch (Exception ex)
             {
                 _logger.LogWarning("Failed to fetch static RSS {Url}: {Msg}", feedUrl, ex.Message);
             }
-        }
+        });
+
+        await Task.WhenAll(tasks);
     }
 
     private static Article? ParseRssItem(XElement item, string countryCode)
@@ -458,17 +459,21 @@ public class GoogleNewsFeedProvider : INewsFeedProvider
         if (!IsGoogleRedirectUrl(googleUrl))
             return googleUrl;
 
+        var base64Str = googleUrl
+            .Split(new[] { "articles/", "read/" }, StringSplitOptions.RemoveEmptyEntries)
+            .LastOrDefault()
+            ?.Split('?')
+            .FirstOrDefault();
+
+        if (string.IsNullOrEmpty(base64Str))
+            return googleUrl;
+
+        var localDecoded = DecodeGoogleNewsUrl(base64Str);
+        if (!string.IsNullOrEmpty(localDecoded))
+            return localDecoded;
+
         try
         {
-            var base64Str = googleUrl
-                .Split(new[] { "articles/", "read/" }, StringSplitOptions.RemoveEmptyEntries)
-                .LastOrDefault()
-                ?.Split('?')
-                .FirstOrDefault();
-
-            if (string.IsNullOrEmpty(base64Str))
-                return googleUrl;
-
             var articlePageUrl = $"https://news.google.com/articles/{base64Str}";
             string? signature = null;
             string? timestamp = null;
@@ -535,6 +540,99 @@ public class GoogleNewsFeedProvider : INewsFeedProvider
         }
 
         return googleUrl;
+    }
+
+    public static string? DecodeGoogleNewsUrl(string base64Str)
+    {
+        try
+        {
+            string normalized = base64Str.Replace('-', '+').Replace('_', '/');
+            int mod = normalized.Length % 4;
+            if (mod > 0)
+            {
+                normalized += new string('=', 4 - mod);
+            }
+            byte[] bytes = Convert.FromBase64String(normalized);
+
+            int index = 0;
+            while (index < bytes.Length)
+            {
+                int tag = ReadVarint(bytes, ref index);
+                int fieldNumber = tag >> 3;
+                int wireType = tag & 0x07;
+
+                if (fieldNumber == 4 && wireType == 2)
+                {
+                    int length = ReadVarint(bytes, ref index);
+                    if (index + length <= bytes.Length)
+                    {
+                        var rawUrl = Encoding.UTF8.GetString(bytes, index, length);
+                        return CleanDecodedUrl(rawUrl);
+                    }
+                }
+                else if (wireType == 0)
+                {
+                    ReadVarint(bytes, ref index);
+                }
+                else if (wireType == 2)
+                {
+                    int length = ReadVarint(bytes, ref index);
+                    index += length;
+                }
+                else if (wireType == 1)
+                {
+                    index += 8;
+                }
+                else if (wireType == 5)
+                {
+                    index += 4;
+                }
+                else
+                {
+                    break;
+                }
+            }
+        }
+        catch
+        {
+        }
+        return null;
+    }
+
+    private static string CleanDecodedUrl(string url)
+    {
+        int length = 0;
+        while (length < url.Length)
+        {
+            char c = url[length];
+            if (c > 127 || char.IsControl(c) || c == ' ')
+            {
+                break;
+            }
+            length++;
+        }
+        return url[..length];
+    }
+
+    private static int ReadVarint(byte[] bytes, ref int index)
+    {
+        int value = 0;
+        int shift = 0;
+        while (index < bytes.Length)
+        {
+            byte b = bytes[index++];
+            value |= (b & 0x7F) << shift;
+            if ((b & 0x80) == 0)
+            {
+                break;
+            }
+            shift += 7;
+            if (shift > 35)
+            {
+                break;
+            }
+        }
+        return value;
     }
 
     private static string? ExtractAttribute(string html, string attributeName)

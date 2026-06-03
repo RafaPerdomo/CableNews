@@ -18,6 +18,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\CableNews.Application\CableNews.Application.csproj" />
+    <ProjectReference Include="..\CableNews.Infrastructure\CableNews.Infrastructure.csproj" />
   </ItemGroup>
 
 </Project>

@@ -5,6 +5,7 @@ using Microsoft.Extensions.Logging;
 using CableNews.Application.Common.Interfaces;
 using CableNews.Application.Common.Models;
 using CableNews.Domain.Entities;
+using System.Collections.Concurrent;
 
 public class GenerateNewsletterCommandHandler : IRequestHandler<GenerateNewsletterCommand, bool>
 {
@@ -38,100 +39,103 @@ public class GenerateNewsletterCommandHandler : IRequestHandler<GenerateNewslett
     {
         _logger.LogInformation("Generating newsletter for {Count} countries", request.Config.Countries.Count);
 
-        var anySuccess = false;
+        var successFlags = new ConcurrentBag<bool>();
         var totalSw = System.Diagnostics.Stopwatch.StartNew();
 
-        foreach (var country in request.Config.Countries)
-        {
-            var countrySw = System.Diagnostics.Stopwatch.StartNew();
-            _logger.LogInformation("--- Processing Newsletter for {CountryName} ({CountryCode}) ---", country.Name, country.Code);
-
-            try
+        await Parallel.ForEachAsync(
+            request.Config.Countries,
+            new ParallelOptions { MaxDegreeOfParallelism = 3, CancellationToken = cancellationToken },
+            async (country, ct) =>
             {
-                var articles = await _newsProvider.FetchNewsAsync(country, request.Config, cancellationToken);
+                var countrySw = System.Diagnostics.Stopwatch.StartNew();
+                _logger.LogInformation("--- Processing Newsletter for {CountryName} ({CountryCode}) ---", country.Name, country.Code);
 
-                if (articles.Count == 0)
+                try
                 {
-                    _logger.LogWarning("No articles fetched for {CountryName}. Skipping.", country.Name);
-                    continue;
-                }
+                    var articles = await _newsProvider.FetchNewsAsync(country, request.Config, ct);
 
-                _logger.LogInformation("Classifying {Count} articles for {CountryName} (Agent 1)...", articles.Count, country.Name);
-                var analyses = await _classifier.ClassifyArticlesAsync(articles, country, cancellationToken);
-
-                _logger.LogInformation("Calculating PR Metrics for {CountryName} (Agent 2)...", country.Name);
-                var metrics = await _metricsService.CalculateMetricsAsync(analyses, articles.Count, country, cancellationToken);
-
-                var relevantHashes = analyses.Select(a => a.ArticleHash).ToHashSet();
-                var relevantArticles = articles.Where(a => relevantHashes.Contains(a.Hash)).ToList();
-
-                _logger.LogInformation("Resolving URLs for {Count} relevant articles (of {Total} fetched) for {CountryName}...",
-                    relevantArticles.Count, articles.Count, country.Name);
-                relevantArticles = await _newsProvider.ResolveUrlsAsync(relevantArticles, cancellationToken);
-
-                var tenderTasks = _tenderProviders.Select(async provider =>
-                {
-                    try
+                    if (articles.Count == 0)
                     {
-                        return await provider.FetchTendersAsync(country, DateTimeOffset.UtcNow.AddDays(-30), cancellationToken);
+                        _logger.LogWarning("No articles fetched for {CountryName}. Skipping.", country.Name);
+                        return;
                     }
-                    catch (Exception ex)
+
+                    _logger.LogInformation("Classifying {Count} articles for {CountryName} (Agent 1)...", articles.Count, country.Name);
+                    var analyses = await _classifier.ClassifyArticlesAsync(articles, country, ct);
+
+                    _logger.LogInformation("Calculating PR Metrics for {CountryName} (Agent 2)...", country.Name);
+                    var metrics = await _metricsService.CalculateMetricsAsync(analyses, articles.Count, country, ct);
+
+                    var relevantHashes = analyses.Select(a => a.ArticleHash).ToHashSet();
+                    var relevantArticles = articles.Where(a => relevantHashes.Contains(a.Hash)).ToList();
+
+                    _logger.LogInformation("Resolving URLs for {Count} relevant articles (of {Total} fetched) for {CountryName}...",
+                        relevantArticles.Count, articles.Count, country.Name);
+                    relevantArticles = await _newsProvider.ResolveUrlsAsync(relevantArticles, ct);
+
+                    var tenderTasks = _tenderProviders.Select(async provider =>
                     {
-                        _logger.LogWarning(ex, "Error fetching tenders from {ProviderName} for {CountryName}", provider.ProviderName, country.Name);
-                        return new List<TenderResult>();
+                        try
+                        {
+                            return await provider.FetchTendersAsync(country, DateTimeOffset.UtcNow.AddDays(-30), ct);
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogWarning(ex, "Error fetching tenders from {ProviderName} for {CountryName}", provider.ProviderName, country.Name);
+                            return new List<TenderResult>();
+                        }
+                    });
+
+                    var tenderResults = await Task.WhenAll(tenderTasks);
+                    var tenders = tenderResults.SelectMany(t => t).ToList();
+                    _logger.LogInformation("Found {Count} active Tenders for {CountryName}.", tenders.Count, country.Name);
+
+                    var analysisMap = analyses.ToDictionary(a => a.ArticleHash);
+                    var analyzedArticles = relevantArticles
+                        .Select(art => new AnalyzedArticle(art, analysisMap[art.Hash]))
+                        .ToList();
+
+                    _logger.LogInformation("Summarizing {Count} relevant articles for {CountryName} (Agent 3)...", analyzedArticles.Count, country.Name);
+                    var summaryHtml = await _summarizer.SummarizeArticlesAsync(analyzedArticles, metrics, tenders, country, ct);
+
+                    if (string.IsNullOrEmpty(summaryHtml))
+                    {
+                        _logger.LogWarning("LLM returned empty summary for {CountryName}.", country.Name);
+                        return;
                     }
-                });
 
-                var tenderResults = await Task.WhenAll(tenderTasks);
-                var tenders = tenderResults.SelectMany(t => t).ToList();
-                _logger.LogInformation("Found {Count} active Tenders for {CountryName}.", tenders.Count, country.Name);
+                    var kpiHtml = CableNews.Application.Common.Utils.EmailKpiCardRenderer.RenderKpiBar(metrics, country.BrandColor ?? "#E1251B");
+                    var glossaryHtml = CableNews.Application.Common.Utils.EmailKpiCardRenderer.RenderGlossary();
 
-                var analysisMap = analyses.ToDictionary(a => a.ArticleHash);
-                var analyzedArticles = relevantArticles
-                    .Select(art => new AnalyzedArticle(art, analysisMap[art.Hash]))
-                    .ToList();
+                    var finalHtml = summaryHtml.Replace("</h1>", $"</h1>\n{kpiHtml}\n");
+                    finalHtml += glossaryHtml;
 
-                _logger.LogInformation("Summarizing {Count} relevant articles for {CountryName} (Agent 3)...", analyzedArticles.Count, country.Name);
-                var summaryHtml = await _summarizer.SummarizeArticlesAsync(analyzedArticles, metrics, tenders, country, cancellationToken);
+                    _logger.LogInformation("Sending executive newsletter for {CountryName} via Email...", country.Name);
+                    await _emailService.SendNewsletterAsync(
+                        finalHtml, 
+                        country.Name, 
+                        country.LocalNexansBrand ?? country.Name, 
+                        country.BrandColor ?? "#E1251B", 
+                        request.Config.Timezone, 
+                        country.EmailRecipients, 
+                        ct);
 
-                if (string.IsNullOrEmpty(summaryHtml))
-                {
-                    _logger.LogWarning("LLM returned empty summary for {CountryName}.", country.Name);
-                    continue;
+                    successFlags.Add(true);
                 }
-
-                var kpiHtml = CableNews.Application.Common.Utils.EmailKpiCardRenderer.RenderKpiBar(metrics, country.BrandColor ?? "#E1251B");
-                var glossaryHtml = CableNews.Application.Common.Utils.EmailKpiCardRenderer.RenderGlossary();
-
-                var finalHtml = summaryHtml.Replace("</h1>", $"</h1>\n{kpiHtml}\n");
-                finalHtml += glossaryHtml;
-
-                _logger.LogInformation("Sending executive newsletter for {CountryName} via Email...", country.Name);
-                await _emailService.SendNewsletterAsync(
-                    finalHtml, 
-                    country.Name, 
-                    country.LocalNexansBrand ?? country.Name, 
-                    country.BrandColor ?? "#E1251B", 
-                    request.Config.Timezone, 
-                    country.EmailRecipients, 
-                    cancellationToken);
-
-                anySuccess = true;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Error generating newsletter for {CountryName}", country.Name);
-            }
-            finally
-            {
-                countrySw.Stop();
-                _logger.LogInformation("Newsletter for {CountryName} completed in {ElapsedMs}ms.", country.Name, countrySw.ElapsedMilliseconds);
-            }
-        }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Error generating newsletter for {CountryName}", country.Name);
+                }
+                finally
+                {
+                    countrySw.Stop();
+                    _logger.LogInformation("Newsletter for {CountryName} completed in {ElapsedMs}ms.", country.Name, countrySw.ElapsedMilliseconds);
+                }
+            });
 
         totalSw.Stop();
         _logger.LogInformation("All newsletters completed in {ElapsedMs}ms.", totalSw.ElapsedMilliseconds);
 
-        return anySuccess;
+        return successFlags.Any(s => s);
     }
 }
